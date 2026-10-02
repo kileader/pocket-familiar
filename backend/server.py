@@ -10,7 +10,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-MODEL = "gpt-4.1-mini-2025-04-14"
+DEFAULT_MODEL = "gpt-4.1-mini-2025-04-14"
 DAILY_REQUEST_LIMIT = 100  # Per process; resets on restart. Deploy one instance.
 COOLDOWN_SECONDS = 5
 INSTRUCTIONS = """You are Pocket Familiar, a tiny curious creature living on a phone.
@@ -80,9 +80,13 @@ def extract_thought(response):
 
 
 def request_thought(context, api_key):
-    payload = {"model": MODEL, "instructions": INSTRUCTIONS,
+    model = os.environ.get("OPENAI_MODEL", "").strip() or DEFAULT_MODEL
+    payload = {"model": model, "instructions": INSTRUCTIONS,
                "input": json.dumps(context, allow_nan=False), "max_output_tokens": 160,
                "store": False}
+    # Luna defaults to reasoning, which can consume this short thought's token budget.
+    if model == "gpt-6-luna" or model.startswith("gpt-6-luna-"):
+        payload["reasoning"] = {"effort": "none"}
     request = urllib.request.Request("https://api.openai.com/v1/responses",
                                      data=json.dumps(payload).encode(), method="POST",
                                      headers={"Authorization": f"Bearer {api_key}",

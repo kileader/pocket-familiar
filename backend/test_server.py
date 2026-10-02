@@ -1,6 +1,7 @@
 import copy
 import http.client
 import json
+import os
 import threading
 import unittest
 from datetime import date
@@ -57,7 +58,8 @@ class ContextTests(unittest.TestCase):
         response = MagicMock()
         response.__enter__.return_value.read.return_value = json.dumps({"status": "completed",
             "output": [{"type": "message", "content": [{"type": "output_text", "text": "Dozing."}]}]}).encode()
-        with patch("server.urllib.request.urlopen", return_value=response) as send:
+        with patch.dict(os.environ, {"OPENAI_MODEL": ""}), \
+                patch("server.urllib.request.urlopen", return_value=response) as send:
             self.assertEqual(request_thought(CONTEXT, "fake-provider-key"), {"text": "Dozing."})
         payload = json.loads(send.call_args.args[0].data)
         self.assertFalse(payload["store"])
@@ -65,6 +67,31 @@ class ContextTests(unittest.TestCase):
         self.assertNotIn("tools", payload)
         self.assertNotIn("fake-provider-key", payload["input"])
         self.assertEqual(json.loads(payload["input"]), CONTEXT)
+        self.assertEqual(payload["model"], "gpt-4.1-mini-2025-04-14")
+        self.assertNotIn("reasoning", payload)
+
+    def test_railway_model_override_disables_reasoning_for_luna(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({"status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "Dozing."}]}]}).encode()
+        for model in ("gpt-6-luna", "gpt-6-luna-2026-01-01"):
+            with self.subTest(model=model), patch.dict(os.environ, {"OPENAI_MODEL": f" {model} "}), \
+                    patch("server.urllib.request.urlopen", return_value=response) as send:
+                request_thought(CONTEXT, "fake-provider-key")
+                payload = json.loads(send.call_args.args[0].data)
+                self.assertEqual(payload["model"], model)
+                self.assertEqual(payload["reasoning"], {"effort": "none"})
+
+    def test_other_model_override_uses_provider_reasoning_defaults(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({"status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "Dozing."}]}]}).encode()
+        with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4.1-mini"}), \
+                patch("server.urllib.request.urlopen", return_value=response) as send:
+            request_thought(CONTEXT, "fake-provider-key")
+        payload = json.loads(send.call_args.args[0].data)
+        self.assertEqual(payload["model"], "gpt-4.1-mini")
+        self.assertNotIn("reasoning", payload)
 
     def test_budget_enforces_cooldown_daily_limit_and_next_day(self):
         budget = RequestBudget()

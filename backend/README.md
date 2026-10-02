@@ -15,6 +15,9 @@ observation and returns only `{ "text": "…" }`. It has no database or state co
      Railway and is never entered into the phone app or committed to Git.
    - `FAMILIAR_ACCESS_TOKEN`: a separate random token shared only with your phone.
      Generate one locally: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+   - `OPENAI_MODEL`: optional model name, for example `gpt-6-luna`. If omitted or
+     blank, the service uses `gpt-4.1-mini-2025-04-14`. Change this variable and
+     deploy the Railway changes to switch models; no Android update is needed.
 5. Deploy. The Dockerfile starts the server on Railway's `PORT`; no start override,
    volume, database, or other service is needed. Keep one replica.
 6. In **Settings → Networking**, generate a public domain. Check
@@ -29,9 +32,12 @@ Railway documentation: [monorepo setup](https://docs.railway.com/guides/deployin
 
 ## Behavior and limits
 
-- Fixed initial model: `gpt-4.1-mini-2025-04-14`, no tools, up to 160 output tokens,
+- Model selected with `OPENAI_MODEL`, no tools, up to 160 output tokens,
   one or two sentences of at most 35 words / 280 characters. Provider responses
   that are empty, incomplete, refused, or too long are rejected.
+- `gpt-6-luna` and its dated snapshots use `reasoning.effort: "none"` so reasoning
+  does not consume the short output budget. Other models use their API defaults;
+  choose a Responses-compatible text model available to your OpenAI project.
 - Requests use `store: false`; this is not a promise of zero provider retention.
   See [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data).
 - Only energy, stimulation, mode, curiosity, derived behavior, coarse/local time,
