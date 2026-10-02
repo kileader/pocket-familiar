@@ -100,8 +100,10 @@ discarding stale responses, and continued operation after a voice failure.
 The prior Railway voice path was verified with a paid response on the owner's
 phone. All 28 v0.2b backend tests pass, along with 46 JVM tests and 23 Android
 instrumented tests. APK assembly and lint pass.
-New catalogue responses and optional app observations have not yet been checked
-with a live provider call.
+The deployed v0.2b gateway also returned a valid catalogue discovery in one live
+provider call using a synthetic context with no phone activity. Selected-app
+collection was checked on the emulator; interpretation of real app observations
+still needs an owner check after opting in.
 
 ## Local backend development
 

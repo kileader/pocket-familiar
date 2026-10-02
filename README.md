@@ -253,9 +253,12 @@ v0.2b: APK assembly and lint pass, along with 46 JVM tests, 28 backend tests, an
 responses. The app chooser and an actual selected-app foreground observation were
 checked on the emulator; a startup event-ordering regression is covered by tests.
 Builds also pass with the GitHub-pinned toolchain and the local Android Studio
-upgrade. The new discovery format and optional app observations have not yet
-been verified with a live provider call. A backend redeploy and updated APK are needed for the new
-features. Older APK requests remain supported with the previous short-thought format.
+upgrade. The new discovery format was also verified through the deployed Railway
+gateway with one live provider response and a synthetic context; no phone app
+activity was sent in that check. v0.2b was installed as an update on the owner's
+Pixel, preserving app data. Interpretation of real selected-app activity still
+needs an owner check after opting in. Older APK requests remain supported with
+the previous short-thought format.
 
 This prototype intentionally excludes chat, feeding, health, currencies, quests,
 accounts, and cloud sync. Its open question is experiential: do persistence,
