@@ -3,6 +3,7 @@ package dev.pocketfamiliar.brain
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
@@ -19,17 +20,7 @@ class HostedCreatureBrain(private val settings: () -> BrainSettings) : CreatureB
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Authorization", "Bearer ${config.accessToken}")
-            val creature = context.creature
-            val payload = JSONObject().put("creature", JSONObject()
-                .put("energy", creature.energy).put("stimulation", creature.stimulation)
-                .put("mode", creature.mode.name).put("curiosity", creature.curiosity)
-                .put("behavior", context.behavior.name))
-                .put("environment", context.environment?.let { environment ->
-                    JSONObject().put("timeOfDay", environment.timeOfDay.name)
-                        .put("localTime", environment.localTime.toString())
-                        .put("batteryPercent", environment.batteryPercent ?: JSONObject.NULL)
-                        .put("isCharging", environment.isCharging ?: JSONObject.NULL)
-                } ?: JSONObject.NULL)
+            val payload = contextPayload(context)
             val bytes = payload.toString().toByteArray(Charsets.UTF_8)
             connection.setFixedLengthStreamingMode(bytes.size)
             connection.outputStream.use { it.write(bytes) }
@@ -40,7 +31,14 @@ class HostedCreatureBrain(private val settings: () -> BrainSettings) : CreatureB
                 else -> throw IOException("The voice service is unavailable. Try again later.")
             }
             val body = connection.inputStream.use { it.readBytesBounded() }
-            BrainResponse(JSONObject(body).getString("text").trim())
+            val response = JSONObject(body)
+            BrainResponse(
+                text = response.getString("text").trim(),
+                discoveryId = response.optString("discoveryId").takeIf { it.isNotBlank() },
+                source = if (response.has("sourceTitle") && response.has("sourceUrl")) {
+                    DiscoverySource(response.getString("sourceTitle"), response.getString("sourceUrl"))
+                } else null,
+            )
         } finally {
             connection.disconnect()
         }
@@ -57,4 +55,32 @@ class HostedCreatureBrain(private val settings: () -> BrainSettings) : CreatureB
         if (size > 4096) throw IOException("The voice service returned an invalid response.")
         return String(buffer, 0, size, Charsets.UTF_8)
     }
+}
+
+/** The explicit outbound boundary excludes identity, raw events, and package identifiers. */
+internal fun contextPayload(context: CreatureContext): JSONObject {
+    val creature = context.creature
+    return JSONObject().put("discoveryVersion", 1)
+        .put("recentDiscoveryIds", JSONArray(context.recentDiscoveryIds))
+        .put("creature", JSONObject()
+            .put("energy", creature.energy).put("stimulation", creature.stimulation)
+            .put("mode", creature.mode.name).put("curiosity", creature.curiosity)
+            .put("behavior", context.behavior.name))
+        .put("environment", context.environment?.let { environment ->
+            JSONObject().put("timeOfDay", environment.timeOfDay.name)
+                .put("localTime", environment.localTime.toString())
+                .put("batteryPercent", environment.batteryPercent ?: JSONObject.NULL)
+                .put("isCharging", environment.isCharging ?: JSONObject.NULL)
+                .apply {
+                    environment.appUsage?.let { usage ->
+                        put("appUsage", JSONObject().put("windowMinutes", usage.windowMinutes)
+                            .put("apps", JSONArray().apply {
+                                usage.apps.forEach { app ->
+                                    put(JSONObject().put("appName", app.appName)
+                                        .put("approximateMinutes", app.approximateMinutes))
+                                }
+                            }))
+                    }
+                }
+        } ?: JSONObject.NULL)
 }

@@ -9,6 +9,7 @@ data class EnvironmentSnapshot(
     val timeOfDay: TimeOfDay,
     val batteryPercent: Int?,
     val isCharging: Boolean?,
+    val appUsage: AppUsageObservation? = null,
 )
 
 enum class TimeOfDay {

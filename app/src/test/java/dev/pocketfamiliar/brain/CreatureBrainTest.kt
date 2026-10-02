@@ -29,6 +29,8 @@ class CreatureBrainTest {
     @Test fun `brain response cannot carry a long or blank thought`() {
         assertEquals("Dozing.", BrainResponse("Dozing.").text)
         assertThrows(IllegalArgumentException::class.java) { BrainResponse(" ") }
-        assertThrows(IllegalArgumentException::class.java) { BrainResponse("x".repeat(281)) }
+        assertThrows(IllegalArgumentException::class.java) { BrainResponse("x".repeat(701)) }
+        assertThrows(IllegalArgumentException::class.java) { BrainResponse("A thought", "bad id") }
+        assertThrows(IllegalArgumentException::class.java) { DiscoverySource("Source", "http://example.com") }
     }
 }

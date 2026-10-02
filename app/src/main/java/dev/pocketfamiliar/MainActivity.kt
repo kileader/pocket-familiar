@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         familiarViewModel = ViewModelProvider(
             this,
             FamiliarViewModel.Factory(familiarApplication.repository, familiarApplication.perception,
-                familiarApplication.brain, familiarApplication.brainSettings),
+                familiarApplication.brain, familiarApplication.brainSettings, familiarApplication.discoveryHistory),
         )[FamiliarViewModel::class.java]
 
         setContent {

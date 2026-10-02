@@ -7,6 +7,7 @@ import java.time.Clock
 class PhonePerception(context: Context, clock: Clock? = null) {
     private val time = TimePerceptionSource(clock)
     private val battery = BatteryPerceptionSource(context)
+    private val appUsage = AppUsagePerceptionSource(context)
 
     fun observe(): EnvironmentSnapshot {
         val timeObservation = time.observe()
@@ -17,6 +18,7 @@ class PhonePerception(context: Context, clock: Clock? = null) {
             timeOfDay = timeObservation.timeOfDay,
             batteryPercent = batteryObservation.percent,
             isCharging = batteryObservation.isCharging,
+            appUsage = appUsage.observe(timeObservation.observedAtMillis),
         )
     }
 }

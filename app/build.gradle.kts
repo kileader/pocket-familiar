@@ -13,8 +13,8 @@ android {
         applicationId = "dev.pocketfamiliar"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2a"
+        versionCode = 4
+        versionName = "0.2b"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

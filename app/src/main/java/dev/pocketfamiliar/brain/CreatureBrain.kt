@@ -9,13 +9,27 @@ interface CreatureBrain {
     suspend fun think(context: CreatureContext): BrainResponse
 }
 
-data class CreatureContext(val creature: CreatureState, val environment: EnvironmentSnapshot?) {
+data class CreatureContext(
+    val creature: CreatureState,
+    val environment: EnvironmentSnapshot?,
+    val recentDiscoveryIds: List<String> = emptyList(),
+) {
     val behavior get() = deriveBehavior(creature)
 }
 
-data class BrainResponse(val text: String) {
+data class BrainResponse(val text: String, val discoveryId: String? = null, val source: DiscoverySource? = null) {
     init {
-        require(text.isNotBlank() && text.length <= 280) { "Expected a short creature thought" }
+        require(text.isNotBlank() && text.length <= 700) { "Expected a short creature discovery" }
+        require(discoveryId == null || discoveryId.matches(Regex("[a-z0-9-]{1,64}")))
+        require(source == null || discoveryId != null) { "A source belongs to a discovery" }
+    }
+}
+
+data class DiscoverySource(val title: String, val url: String) {
+    init {
+        require(title.isNotBlank() && title.length <= 120 && url.length <= 512)
+        val uri = java.net.URI(url)
+        require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null)
     }
 }
 

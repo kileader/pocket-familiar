@@ -1,8 +1,8 @@
 # Pocket Familiar
 
 An Android prototype about a small creature that continues to exist between visits.
-v0.2a adds an optional AI thought to the v0.1b visual expression and v0.1a persistence,
-autonomous sleep/wake cycles, and awareness of phone context.
+v0.2b adds mixed discoveries and optional observations of chosen apps to the v0.2a
+AI voice, v0.1b visual expression, and v0.1a persistent simulation.
 There is one creature, one screen, a poke, and an on-demand **Listen** action.
 
 The database is canon. The simulation owns state. Behavior is derived from that state;
@@ -12,9 +12,9 @@ configured hosted backend and internet.
 
 ## Run
 
-Requires JDK 17 or 21 and an Android SDK with API 35 and Build Tools 35.0.0.
-Open this directory in a compatible Android Studio and install the requested SDK
-packages. Use an Android 8.0 (API 26) or newer device/emulator.
+Open this directory in a compatible Android Studio, use the project's configured
+JVM toolchain, and install the SDK packages requested by the build files.
+Use an Android 8.0 (API 26) or newer device/emulator.
 
 For command-line builds, set `ANDROID_HOME` or create ignored `local.properties`:
 
@@ -32,10 +32,10 @@ From PowerShell:
 On macOS/Linux, use `./gradlew` (make it executable if needed). The APK is written to
 `app/build/outputs/apk/debug/app-debug.apk`.
 
-Dependencies are pinned: Kotlin 2.1.20, Compose BOM 2025.04.01, Room 2.7.2,
-coroutines 1.10.2, AGP 8.13.2, and Gradle 8.13. The wrapper verifies its downloaded
-distribution against a pinned SHA-256 checksum. The versions form a conservative
-API 35 prototype baseline. They are not a claim of current store-release readiness.
+Dependency and toolchain versions are pinned in the Gradle build files, wrapper
+properties, and daemon JVM properties. The wrapper verifies its downloaded
+distribution against a pinned SHA-256 checksum. This prototype is not a claim of
+current store-release readiness.
 
 ## Use
 
@@ -64,6 +64,19 @@ timestamps, interaction count, and elapsed time processed by the latest update.
 Resume the app or poke to obtain a fresh observation. There are no background jobs,
 simulation timers, notifications, or prominent meters.
 
+Tap **Listen** for a checked interesting fact, an original gentle joke, or a playful
+observation in the creature's voice. The small catalogue contains 17 materials:
+6 sourced facts, 6 jokes, and 5 observation seeds. Facts and jokes are displayed
+verbatim, followed by an AI reaction; facts include a link to their source. Current
+mode and behavior shape the delivery, including sleepy responses while resting.
+Responses aim for 2–4 sentences, with a limit of 80 words and 700 UTF-16 code units.
+
+The last eight displayed material IDs are kept in private app preferences to avoid
+recent repeats. This is presentation history, separate from the creature database.
+The current thought remains visible when resuming or returning from its source
+link. Poking, a new Listen action, or changing voice settings clears it. Thought text is
+not saved across app restarts.
+
 ## Architecture
 
 One app module, with separate packages under `dev.pocketfamiliar`:
@@ -71,10 +84,10 @@ One app module, with separate packages under `dev.pocketfamiliar`:
 ```text
 simulation/   Plain Kotlin state, tuning rules, elapsed-time engine, derived behavior
 persistence/  Room entity/DAO/database and transactional repository
-perception/   Independent time and battery sources, combined observation snapshot
+perception/   Time, battery, optional chosen-app usage sources, observation snapshot
 ui/           ViewModel, Compose screen, and transient visual reaction
-brain/        Read-only context, text response, HTTPS gateway client, private settings
-backend/      Python voice gateway and Railway deployment files (outside app module)
+brain/        Read-only context, text/source response, HTTPS client, private preferences
+backend/      Python voice gateway, reviewed catalogue, Railway deployment files
 ```
 
 `FamiliarApplication` constructs shared dependencies. `MainActivity.onResume()` asks
@@ -97,7 +110,9 @@ The only Room table is `creature`, with a single row identified by `1`:
 | interactionCount | Long | Total persisted pokes |
 
 Behavior, environmental observations, animation state, and debug elapsed time are
-not persisted. `CreatureState` has no Android, Room, UI, or model dependency; its
+not persisted. Voice settings, optional app selections, and eight recent discovery
+IDs live in private preferences; none are canonical creature state.
+`CreatureState` has no Android, Room, UI, or model dependency; its
 primitive fields and enum names can be serialized for a future export. `CreatureBrain`
 consumes state and an environment snapshot and returns a short text response. Network
 work runs outside the simulation mutex, and responses from outdated snapshots are
@@ -160,9 +175,25 @@ Time is observed in the phone's current local zone. Coarse periods are night
 account for its reported scale. Unknown readings remain unknown. Charging/full
 status is separate from percentage.
 
-These sources require no runtime permissions. New sensors can follow the independent
-source pattern and extend the observation snapshot. They should not mutate creature
-state or introduce a parallel simulation.
+Time and battery require no runtime permissions. `PhonePerception` combines their
+independent sources with `AppUsagePerceptionSource`; each supplies observations,
+not simulation inputs. New sensors can follow this source pattern and extend the
+snapshot without creating a parallel simulation.
+
+App observations are optional and off by default. Under **Developer details →
+App observations**, enable **Include selected apps**, choose up to eight apps,
+and grant Pocket Familiar Android's special **Usage Access** in system settings.
+All three controls are required: granting Usage Access alone does not enable sharing.
+The chooser lists launchable apps; clearing selections or turning the toggle off
+stops app activity from being included.
+
+When enabled, the phone estimates foreground use within the past 60 minutes and
+includes at most five chosen app names with rounded approximate minutes on Listen.
+Raw Android events and package identifiers stay on the phone; the backend and
+OpenAI receive only the reduced names/time summary. Screen contents, messages,
+typed text, notifications, and web pages are not read. Android events can be
+incomplete, so these are estimates rather than precise activity records. Missing
+access or observations leave the ordinary creature and Listen feature working.
 
 ## Verification
 
@@ -194,19 +225,37 @@ Manual acceptance check on a device:
 4. Leave the app closed, return later, and inspect the elapsed-time update.
 5. Compare time/battery/charging context against the phone, then resume or poke.
 6. Use simulation tests to verify full sleep/wake cycles without waiting a day.
+7. Configure the voice service and Listen several times. Check that discoveries
+   vary and sourced facts show a working link.
+8. Open a fact's source and return. Confirm the discovery remains readable; poke
+   and confirm it clears without changing the sleep/wake rules.
+9. Optionally enable chosen-app observations and Usage Access. Use a selected app,
+   then Listen; check the approximate past-hour summary in developer details.
+   Disable observations and confirm the summary is no longer included.
 
 ## AI voice setup
 
 Deploy the small gateway on Railway using [the backend instructions](backend/README.md).
 Keep the OpenAI API key in Railway variables. Configure the HTTPS URL and a separate
 personal access token in the app's developer details, then tap **Listen** to display
-one short thought. This is text, not audible speech or chat. Requests happen only on
-that action; phone app activity is not observed yet. Thoughts are not persisted.
+one short discovery. This is text, not audible speech or chat. Requests happen only
+on that action. Optional app observations require the explicit controls described
+above; they never change creature energy or other canonical fields.
 
 v0.2a: APK assembly and lint pass, along with 30 JVM tests, 14 backend tests, and
 6 instrumented tests on the dedicated Android 15 emulator (3 voice, 3 Room).
-Voice tests use fake model responses. The first paid response and Railway deployment
-still need to be verified after the backend variables and phone settings are supplied.
+Voice tests use fake model responses. The existing Railway voice connection was
+subsequently verified with a live response on the owner's phone.
+
+v0.2b: APK assembly and lint pass, along with 46 JVM tests, 28 backend tests, and
+23 instrumented tests on the dedicated Android 15 emulator (7 outbound context,
+5 voice/history, 8 app observation settings, 3 Room). Tests use mocked model
+responses. The app chooser and an actual selected-app foreground observation were
+checked on the emulator; a startup event-ordering regression is covered by tests.
+Builds also pass with the GitHub-pinned toolchain and the local Android Studio
+upgrade. The new discovery format and optional app observations have not yet
+been verified with a live provider call. A backend redeploy and updated APK are needed for the new
+features. Older APK requests remain supported with the previous short-thought format.
 
 This prototype intentionally excludes chat, feeding, health, currencies, quests,
 accounts, and cloud sync. Its open question is experiential: do persistence,

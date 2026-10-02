@@ -26,6 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -48,6 +49,7 @@ fun FamiliarScreen(
 ) {
     val behavior = state.update?.state?.let(::deriveBehavior)
     var debugExpanded by rememberSaveable { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
 
     Column(
         modifier = Modifier
@@ -85,6 +87,11 @@ fun FamiliarScreen(
                 Text(if (state.isThinking) "Listening…" else "Listen")
             }
             state.thought?.let { Text(it, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge) }
+            state.thoughtSource?.let { source ->
+                TextButton(onClick = { runCatching { uriHandler.openUri(source.url) } }) {
+                    Text("Source: ${source.title}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
             state.voiceError?.let {
                 Text(it, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.error)
             }
@@ -113,6 +120,7 @@ fun FamiliarScreen(
         if (debugExpanded) {
             state.update?.let { DebugPanel(it, state.environment) }
                 ?: Text("No saved state has been loaded yet.", style = MaterialTheme.typography.bodySmall)
+            AppObservationSettings(onChanged = onRefresh)
             VoiceSettings(state.brainConfigured, onSaveBrainSettings)
         }
     }
@@ -124,8 +132,8 @@ private fun VoiceSettings(configured: Boolean, onSave: (String, String) -> Unit)
     var token by remember { mutableStateOf("") }
     Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(if (configured) "Voice service configured" else "Voice service setup", style = MaterialTheme.typography.titleSmall)
-        Text("Listen sends creature state, local time, and phone battery context to your backend and OpenAI. " +
-            "No other app activity is collected. Thoughts are temporary text, not saved memories.",
+        Text("Listen sends creature state and enabled phone observations to your backend and OpenAI. " +
+            "Only the last eight discovery IDs are saved locally and sent to your backend to reduce repeats; conversations are not saved.",
             style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(value = endpoint, onValueChange = { endpoint = it },
             label = { Text("Backend URL (https://…)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -185,7 +193,13 @@ private fun DebugPanel(update: SimulationUpdate, environment: EnvironmentSnapsho
                 "Elapsed in latest update",
                 "${update.elapsedMillis} ms (${String.format(Locale.ROOT, "%.3f", update.elapsedMillis / 3_600_000.0)} h)",
             )
-            environment?.let { DebugValue("Environment observed at", it.observedAtMillis.timestamp()) }
+            environment?.let {
+                DebugValue("Environment observed at", it.observedAtMillis.timestamp())
+                DebugValue("Selected app observations · past hour", it.appUsage?.apps?.let { apps ->
+                    if (apps.isEmpty()) "No recent selected app use observed"
+                    else apps.joinToString("\n") { app -> "${app.appName}: about ${app.approximateMinutes} min" }
+                } ?: "Off or unavailable")
+            }
         }
     }
 }

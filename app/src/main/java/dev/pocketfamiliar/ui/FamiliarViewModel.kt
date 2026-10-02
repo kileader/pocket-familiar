@@ -11,14 +11,18 @@ import dev.pocketfamiliar.brain.BrainSettings
 import dev.pocketfamiliar.brain.BrainSettingsStore
 import dev.pocketfamiliar.brain.CreatureBrain
 import dev.pocketfamiliar.brain.CreatureContext
+import dev.pocketfamiliar.brain.DiscoveryHistoryStore
+import dev.pocketfamiliar.brain.DiscoverySource
 import dev.pocketfamiliar.simulation.SimulationUpdate
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 data class FamiliarUiState(
     val update: SimulationUpdate? = null,
@@ -27,6 +31,7 @@ data class FamiliarUiState(
     val error: String? = null,
     val pokeReaction: Long = 0,
     val thought: String? = null,
+    val thoughtSource: DiscoverySource? = null,
     val isThinking: Boolean = false,
     val voiceError: String? = null,
     val brainConfigured: Boolean = false,
@@ -37,6 +42,7 @@ class FamiliarViewModel(
     private val perception: PhonePerception,
     private val brain: CreatureBrain,
     private val brainSettings: BrainSettingsStore,
+    private val discoveryHistory: DiscoveryHistoryStore,
 ) : ViewModel() {
     private val mutableUiState = MutableStateFlow(FamiliarUiState(brainConfigured = brainSettings.read().configured))
     val uiState: StateFlow<FamiliarUiState> = mutableUiState.asStateFlow()
@@ -47,7 +53,7 @@ class FamiliarViewModel(
         try {
             brainSettings.save(BrainSettings(endpoint, token))
             revision++
-            mutableUiState.value = mutableUiState.value.copy(brainConfigured = true, voiceError = null, thought = null)
+            mutableUiState.value = mutableUiState.value.copy(brainConfigured = true, voiceError = null, thought = null, thoughtSource = null)
         } catch (error: IllegalArgumentException) {
             mutableUiState.value = mutableUiState.value.copy(voiceError = error.message ?: "Check the backend settings.")
         }
@@ -59,7 +65,7 @@ class FamiliarViewModel(
             mutableUiState.value = mutableUiState.value.copy(voiceError = "Set up the voice service in developer details first.")
             return
         }
-        mutableUiState.value = mutableUiState.value.copy(isThinking = true, voiceError = null, thought = null)
+        mutableUiState.value = mutableUiState.value.copy(isThinking = true, voiceError = null, thought = null, thoughtSource = null)
         viewModelScope.launch {
             var requestRevision = revision
             try {
@@ -69,12 +75,13 @@ class FamiliarViewModel(
                     revision++
                     requestRevision = revision
                     mutableUiState.value = mutableUiState.value.copy(update = update, environment = environment, isLoading = false)
-                    CreatureContext(update.state, environment)
+                    CreatureContext(update.state, environment, discoveryHistory.read())
                 }
                 // Network work never holds the simulation mutex. A poke can commit while waiting.
                 val response = brain.think(context)
                 if (revision == requestRevision) {
-                    mutableUiState.value = mutableUiState.value.copy(thought = response.text)
+                    response.discoveryId?.let(discoveryHistory::remember)
+                    mutableUiState.value = mutableUiState.value.copy(thought = response.text, thoughtSource = response.source)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -90,8 +97,10 @@ class FamiliarViewModel(
         }
     }
 
-    private fun observeEnvironment() = try {
-        perception.observe()
+    private suspend fun observeEnvironment() = try {
+        withContext(Dispatchers.IO) { perception.observe() }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (error: Exception) {
         Log.w("PocketFamiliar", "Environmental observations unavailable", error)
         null
@@ -105,7 +114,12 @@ class FamiliarViewModel(
         viewModelScope.launch {
             operationMutex.withLock {
                 revision++
-                mutableUiState.value = mutableUiState.value.copy(isLoading = true, error = null, thought = null, voiceError = null)
+                mutableUiState.value = mutableUiState.value.copy(
+                    isLoading = true, error = null,
+                    thought = if (poke) null else mutableUiState.value.thought,
+                    thoughtSource = if (poke) null else mutableUiState.value.thoughtSource,
+                    voiceError = null,
+                )
                 try {
                     val update = if (poke) repository.poke() else repository.refresh()
                     val environment = observeEnvironment()
@@ -138,11 +152,12 @@ class FamiliarViewModel(
         private val perception: PhonePerception,
         private val brain: CreatureBrain,
         private val brainSettings: BrainSettingsStore,
+        private val discoveryHistory: DiscoveryHistoryStore,
     ) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(FamiliarViewModel::class.java))
             @Suppress("UNCHECKED_CAST")
-            return FamiliarViewModel(repository, perception, brain, brainSettings) as T
+            return FamiliarViewModel(repository, perception, brain, brainSettings, discoveryHistory) as T
         }
     }
 }
