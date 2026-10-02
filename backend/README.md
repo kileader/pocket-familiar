@@ -2,7 +2,8 @@
 
 Small personal prototype using Python's standard library and OpenAI's Responses API.
 The Android app owns the creature and SQLite database. This service receives an
-observation and returns only `{ "text": "…" }`. It has no database or state commands.
+observation and returns text with optional discovery ID and source metadata.
+It has no creature database or state commands. The simulation remains on the phone.
 
 ## Deploy on Railway
 
@@ -32,25 +33,47 @@ Railway documentation: [monorepo setup](https://docs.railway.com/guides/deployin
 
 ## Behavior and limits
 
-- Model selected with `OPENAI_MODEL`, no tools, normally up to 160 output tokens,
-  one or two sentences of at most 35 words / 280 characters. Provider responses
-  that are empty, incomplete, refused, or too long are rejected.
+- Model selected with `OPENAI_MODEL`, no tools. v0.2b Listen requests select from
+  [17 reviewed materials](discoveries.py): 6 facts, 6 original gentle jokes, and
+  5 playful observation seeds. Facts and jokes are inserted verbatim; the model
+  supplies a brief personality reaction rather than rewriting their core. Facts
+  carry `sourceTitle` and `sourceUrl` for a link displayed by the Android app.
+- New discoveries aim for 2–4 sentences, with a combined limit of 80 words and
+  700 UTF-16 code units. They normally use a 400-output-token provider budget.
+  Older APK requests without `discoveryVersion: 1` retain their compatible short
+  format: normally 160 tokens, one or two sentences, at most 35 words / 280
+  characters. Empty, incomplete, refused, or oversized responses are rejected.
 - `gpt-6-luna` and its dated snapshots use `reasoning.effort: "none"` so reasoning
   does not consume the short output budget. `gpt-6.1-sol` uses low reasoning and a
-  2,048-token cap shared by reasoning and visible output; the visible thought is
-  still limited to 35 words / 280 characters. This is a bounded starting budget,
+  2,048-token cap shared by reasoning and visible output. Visible responses still
+  follow the new or legacy limits above. This is a bounded starting budget,
   not a guarantee that every response finishes; incomplete responses are rejected.
   Other models use their API defaults;
   choose a Responses-compatible text model available to your OpenAI project.
 - Requests use `store: false`; this is not a promise of zero provider retention.
   See [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data).
-- Only energy, stimulation, mode, curiosity, derived behavior, coarse/local time,
-  battery percentage, and charging status leave the phone. No identity timestamps,
-  interaction history, app use, notifications, messages, or screen contents.
+- Energy, stimulation, mode, curiosity, derived behavior, coarse/local time,
+  battery percentage, and charging status form the basic model context. No identity
+  timestamps, poke history, notifications, messages, or screen contents are sent.
+- The phone keeps the last eight displayed material IDs in private preferences
+  and sends them as `recentDiscoveryIds`. The backend excludes these materials
+  from selection and returns a new `discoveryId`. History IDs are used by the
+  backend, not forwarded to the model. Thought text and raw activity histories
+  are not stored by this service.
+- Optional app observations are off by default. The phone requires its local
+  **Include selected apps** toggle, a chooser selection, and Android **Usage
+  Access**. Up to eight apps may be chosen; at most five observed app names and
+  rounded approximate foreground minutes from the past 60 minutes are sent in
+  `environment.appUsage`. Raw events and package identifiers remain on the phone.
+  No app contents, typing, web pages, intentions, or longer-term habits are known.
+  The observations can influence a playful response without guilt or productivity
+  advice. Without this optional summary, ordinary Listen still works.
 - The prompt asks for consistent, gentle interpretation with no guilt or invented
   observations. Generated language can still be wrong; the model never owns reality.
-- Thoughts are transient and cleared when the creature refreshes or is poked.
-  Slow responses are discarded if state or settings changed while waiting.
+- Thoughts are transient across app restarts but remain visible on resume and
+  when returning from a source link. Poking, a new Listen action, or settings
+  voice setting changes clear the displayed thought. Slow responses are discarded if state or
+  settings changed while waiting; network work never holds the simulation mutex.
 - One in-flight provider request; five-second cooldown; 100 attempts per UTC day
   per process. Failures also count. There are no automatic retries or background calls.
   Counters reset on restart/redeployment and are not a billing hard cap. Use provider
@@ -69,9 +92,16 @@ python -m unittest discover -s backend -v
 ```
 
 Tests use fake provider responses, make no paid requests, and cover validation,
-authentication, cooldown/day limits, output filtering, and error isolation.
+authentication, cooldown/day limits, discovery selection, source metadata,
+legacy compatibility, output filtering, and error isolation.
 Android instrumented voice tests cover state preservation, concurrent pokes,
 discarding stale responses, and continued operation after a voice failure.
+
+The prior Railway voice path was verified with a paid response on the owner's
+phone. All 28 v0.2b backend tests pass, along with 46 JVM tests and 23 Android
+instrumented tests. APK assembly and lint pass.
+New catalogue responses and optional app observations have not yet been checked
+with a live provider call.
 
 ## Local backend development
 
