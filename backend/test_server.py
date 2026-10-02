@@ -93,6 +93,18 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-4.1-mini")
         self.assertNotIn("reasoning", payload)
 
+    def test_sol_uses_low_reasoning_with_room_for_visible_text(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({"status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "Dozing."}]}]}).encode()
+        with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-6.1-sol"}), \
+                patch("server.urllib.request.urlopen", return_value=response) as send:
+            self.assertEqual(request_thought(CONTEXT, "fake-provider-key"), {"text": "Dozing."})
+        payload = json.loads(send.call_args.args[0].data)
+        self.assertEqual(payload["model"], "gpt-6.1-sol")
+        self.assertEqual(payload["reasoning"], {"effort": "low"})
+        self.assertEqual(payload["max_output_tokens"], 2048)
+
     def test_budget_enforces_cooldown_daily_limit_and_next_day(self):
         budget = RequestBudget()
         today = date(2026, 10, 1)

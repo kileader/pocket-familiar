@@ -203,7 +203,7 @@ personal access token in the app's developer details, then tap **Listen** to dis
 one short thought. This is text, not audible speech or chat. Requests happen only on
 that action; phone app activity is not observed yet. Thoughts are not persisted.
 
-v0.2a: APK assembly and lint pass, along with 30 JVM tests, 13 backend tests, and
+v0.2a: APK assembly and lint pass, along with 30 JVM tests, 14 backend tests, and
 6 instrumented tests on the dedicated Android 15 emulator (3 voice, 3 Room).
 Voice tests use fake model responses. The first paid response and Railway deployment
 still need to be verified after the backend variables and phone settings are supplied.

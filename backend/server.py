@@ -87,6 +87,10 @@ def request_thought(context, api_key):
     # Luna defaults to reasoning, which can consume this short thought's token budget.
     if model == "gpt-6-luna" or model.startswith("gpt-6-luna-"):
         payload["reasoning"] = {"effort": "none"}
+    elif model == "gpt-6.1-sol" or model.startswith("gpt-6.1-sol-"):
+        # Sol requires reasoning; the budget includes reasoning and visible text.
+        payload["reasoning"] = {"effort": "low"}
+        payload["max_output_tokens"] = 2048
     request = urllib.request.Request("https://api.openai.com/v1/responses",
                                      data=json.dumps(payload).encode(), method="POST",
                                      headers={"Authorization": f"Bearer {api_key}",
