@@ -27,7 +27,8 @@ class MainActivity : ComponentActivity() {
         val familiarApplication = application as FamiliarApplication
         familiarViewModel = ViewModelProvider(
             this,
-            FamiliarViewModel.Factory(familiarApplication.repository, familiarApplication.perception),
+            FamiliarViewModel.Factory(familiarApplication.repository, familiarApplication.perception,
+                familiarApplication.brain, familiarApplication.brainSettings),
         )[FamiliarViewModel::class.java]
 
         setContent {
@@ -47,6 +48,8 @@ class MainActivity : ComponentActivity() {
                         state = uiState,
                         onPoke = familiarViewModel::poke,
                         onRefresh = familiarViewModel::refresh,
+                        onListen = familiarViewModel::listen,
+                        onSaveBrainSettings = familiarViewModel::saveBrainSettings,
                     )
                 }
             }

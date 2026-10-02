@@ -1,12 +1,14 @@
 # Pocket Familiar
 
 An Android prototype about a small creature that continues to exist between visits.
-v0.1b adds visual expression to the v0.1a persistence, autonomous sleep/wake cycles,
-and awareness of phone context.
-There is one creature, one screen, and one interaction: a poke.
+v0.2a adds an optional AI thought to the v0.1b visual expression and v0.1a persistence,
+autonomous sleep/wake cycles, and awareness of phone context.
+There is one creature, one screen, a poke, and an on-demand **Listen** action.
 
 The database is canon. The simulation owns state. Behavior is derived from that state;
-phone observations do not change it. There is no AI integration.
+phone observations do not change it. AI interprets a read-only snapshot and returns
+words only. It cannot change state. The creature works offline; listening needs a
+configured hosted backend and internet.
 
 ## Run
 
@@ -71,6 +73,8 @@ simulation/   Plain Kotlin state, tuning rules, elapsed-time engine, derived beh
 persistence/  Room entity/DAO/database and transactional repository
 perception/   Independent time and battery sources, combined observation snapshot
 ui/           ViewModel, Compose screen, and transient visual reaction
+brain/        Read-only context, text response, HTTPS gateway client, private settings
+backend/      Python voice gateway and Railway deployment files (outside app module)
 ```
 
 `FamiliarApplication` constructs shared dependencies. `MainActivity.onResume()` asks
@@ -94,9 +98,10 @@ The only Room table is `creature`, with a single row identified by `1`:
 
 Behavior, environmental observations, animation state, and debug elapsed time are
 not persisted. `CreatureState` has no Android, Room, UI, or model dependency; its
-primitive fields and enum names can be serialized for a future export. No brain
-interface is needed in this version. Future interpretations can consume this state
-and an environment snapshot without owning either.
+primitive fields and enum names can be serialized for a future export. `CreatureBrain`
+consumes state and an environment snapshot and returns a short text response. Network
+work runs outside the simulation mutex, and responses from outdated snapshots are
+discarded. The Room schema and simulation rules are unchanged.
 
 Database errors are surfaced for retry; the app does not reset or recreate a creature
 to hide them. Schema export is enabled. Future schema changes require explicit
@@ -190,6 +195,19 @@ Manual acceptance check on a device:
 5. Compare time/battery/charging context against the phone, then resume or poke.
 6. Use simulation tests to verify full sleep/wake cycles without waiting a day.
 
+## AI voice setup
+
+Deploy the small gateway on Railway using [the backend instructions](backend/README.md).
+Keep the OpenAI API key in Railway variables. Configure the HTTPS URL and a separate
+personal access token in the app's developer details, then tap **Listen** to display
+one short thought. This is text, not audible speech or chat. Requests happen only on
+that action; phone app activity is not observed yet. Thoughts are not persisted.
+
+v0.2a: APK assembly and lint pass, along with 30 JVM tests, 11 backend tests, and
+6 instrumented tests on the dedicated Android 15 emulator (3 voice, 3 Room).
+Voice tests use fake model responses. The first paid response and Railway deployment
+still need to be verified after the backend variables and phone settings are supplied.
+
 This prototype intentionally excludes chat, feeding, health, currencies, quests,
-accounts, cloud sync, and AI. Its open question is experiential: do persistence,
+accounts, and cloud sync. Its open question is experiential: do persistence,
 autonomous cycles, and simple situated observations make the creature feel continuous?

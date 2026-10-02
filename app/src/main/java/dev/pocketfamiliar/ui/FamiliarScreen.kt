@@ -16,6 +16,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,7 +39,13 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Composable
-fun FamiliarScreen(state: FamiliarUiState, onPoke: () -> Unit, onRefresh: () -> Unit) {
+fun FamiliarScreen(
+    state: FamiliarUiState,
+    onPoke: () -> Unit,
+    onRefresh: () -> Unit,
+    onListen: () -> Unit,
+    onSaveBrainSettings: (String, String) -> Unit,
+) {
     val behavior = state.update?.state?.let(::deriveBehavior)
     var debugExpanded by rememberSaveable { mutableStateOf(false) }
 
@@ -71,6 +80,16 @@ fun FamiliarScreen(state: FamiliarUiState, onPoke: () -> Unit, onRefresh: () -> 
         Spacer(Modifier.height(12.dp))
         state.environment?.let { EnvironmentContext(it) }
         if (state.update != null) {
+            Spacer(Modifier.height(16.dp))
+            TextButton(onClick = onListen, enabled = !state.isThinking && !state.isLoading) {
+                Text(if (state.isThinking) "Listening…" else "Listen")
+            }
+            state.thought?.let { Text(it, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge) }
+            state.voiceError?.let {
+                Text(it, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.error)
+            }
+        }
+        if (state.update != null) {
             Spacer(Modifier.height(24.dp))
             Text(
                 "Tap gently to poke.",
@@ -94,6 +113,27 @@ fun FamiliarScreen(state: FamiliarUiState, onPoke: () -> Unit, onRefresh: () -> 
         if (debugExpanded) {
             state.update?.let { DebugPanel(it, state.environment) }
                 ?: Text("No saved state has been loaded yet.", style = MaterialTheme.typography.bodySmall)
+            VoiceSettings(state.brainConfigured, onSaveBrainSettings)
+        }
+    }
+}
+
+@Composable
+private fun VoiceSettings(configured: Boolean, onSave: (String, String) -> Unit) {
+    var endpoint by remember { mutableStateOf("") }
+    var token by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(if (configured) "Voice service configured" else "Voice service setup", style = MaterialTheme.typography.titleSmall)
+        Text("Listen sends creature state, local time, and phone battery context to your backend and OpenAI. " +
+            "No other app activity is collected. Thoughts are temporary text, not saved memories.",
+            style = MaterialTheme.typography.bodySmall)
+        OutlinedTextField(value = endpoint, onValueChange = { endpoint = it },
+            label = { Text("Backend URL (https://…)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(value = token, onValueChange = { token = it },
+            label = { Text("Backend access token · not an OpenAI key") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+        TextButton(onClick = { onSave(endpoint, token); token = "" }, enabled = endpoint.isNotBlank() && token.isNotBlank()) {
+            Text("Save voice settings")
         }
     }
 }
