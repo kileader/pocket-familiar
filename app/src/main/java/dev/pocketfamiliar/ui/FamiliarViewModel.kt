@@ -97,13 +97,32 @@ class FamiliarViewModel(
         }
     }
 
-    private suspend fun observeEnvironment() = try {
-        withContext(Dispatchers.IO) { perception.observe() }
+    private suspend fun observeEnvironment(includeAppUsage: Boolean = true) = try {
+        withContext(Dispatchers.IO) { perception.observe(includeAppUsage) }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
         Log.w("PocketFamiliar", "Environmental observations unavailable", error)
         null
+    }
+
+    /** Called by the Activity's resumed lifecycle; cancellation also releases the receiver. */
+    suspend fun observePhoneStateChanges() {
+        try {
+            perception.phoneStateChanges().collect {
+                operationMutex.withLock {
+                    val environment = observeEnvironment(includeAppUsage = false)
+                    mutableUiState.value = mutableUiState.value.copy(
+                        environment = environment?.copy(appUsage = mutableUiState.value.environment?.appUsage),
+                    )
+                    // No repository access, voice request, revision change, or poke animation.
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w("PocketFamiliar", "Live phone observations unavailable", error)
+        }
     }
 
     fun refresh() = update(poke = false)

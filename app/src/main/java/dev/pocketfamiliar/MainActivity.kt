@@ -11,9 +11,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pocketfamiliar.ui.FamiliarScreen
 import dev.pocketfamiliar.ui.FamiliarViewModel
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var familiarViewModel: FamiliarViewModel
@@ -30,6 +34,12 @@ class MainActivity : ComponentActivity() {
             FamiliarViewModel.Factory(familiarApplication.repository, familiarApplication.perception,
                 familiarApplication.brain, familiarApplication.brainSettings, familiarApplication.discoveryHistory),
         )[FamiliarViewModel::class.java]
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                familiarViewModel.observePhoneStateChanges()
+            }
+        }
 
         setContent {
             MaterialTheme(

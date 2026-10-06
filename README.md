@@ -4,11 +4,21 @@ An Android prototype about a small creature that continues to exist between visi
 v0.2b adds mixed discoveries and optional observations of chosen apps to the v0.2a
 AI voice, v0.1b visual expression, and v0.1a persistent simulation.
 There is one creature, one screen, a poke, and an on-demand **Listen** action.
+The **Familiar Snapshot** screen brings its pose, phone context, current thought,
+and a little shared history into one view.
 
 The database is canon. The simulation owns state. Behavior is derived from that state;
 phone observations do not change it. AI interprets a read-only snapshot and returns
 words only. It cannot change state. The creature works offline; listening needs a
 configured hosted backend and internet.
+
+<p>
+  <img src="docs/screenshots/familiar-snapshot.png" alt="Familiar Snapshot: a watchful creature, evening and charging context, a short thought, and saved history" width="320">
+</p>
+
+Emulator capture with read-only fixtures for creature state, phone context, and
+sample thought text. The app displays your local creature and its Listen response;
+fixture data is never written to the creature database.
 
 ## Run
 
@@ -39,8 +49,15 @@ current store-release readiness.
 
 ## Use
 
-The main screen shows a drawn creature, its behavior, local time of day,
-and phone battery/charging context. Tap the creature for a brief reaction. A poke adds
+The main screen is **Familiar Snapshot**: the animated creature takes center stage,
+with a derived behavior label and a short description of its pose. Soft decorative
+light follows the observed time of day. Small context cues show local time and
+phone battery/charging status; unavailable readings are labeled honestly.
+The thought card displays the current Listen response and any source link in full.
+The footer shows the creature's saved creation date and total poke count.
+These are presentations of existing data, with no new simulation rules or AI authority.
+
+Tap the creature for a brief reaction. A poke adds
 stimulation and records an interaction; it does not restore energy or wake a resting
 creature.
 
@@ -52,17 +69,35 @@ effects driven by derived behavior. They never mutate canonical state. Idle moti
 is active only while the screen is resumed; old poke reactions do not replay when
 returning or recreating the screen.
 
+Three small local reactions use the phone context already available:
+
+* **Charging:** soft sparkles while the familiar keeps the phone company.
+* **Low battery:** at 20% or below, while not charging, an awake familiar glances
+  toward a small amber battery cue. A resting familiar keeps its eyes closed.
+* **Night:** from 22:00 through 05:59, a slower idle rhythm and a tiny moonlit sway.
+
+One reaction appears at a time: charging takes priority, then low battery, then
+night. Each has a brief caption beside the pose, separate from the Listen thought.
+Unknown battery or charging readings never imply a low-battery warning. Reactions
+need no new permissions, backend request, stored history, or simulation rules.
+
 <p>
   <img src="docs/screenshots/resting.png" alt="The creature curled down and resting" width="240">
   <img src="docs/screenshots/lively.png" alt="The upright creature smiling while lively" width="240">
 </p>
 
-Emulator captures of resting and lively poses using controlled test states.
+Earlier pose captures from v0.1b using controlled test states.
 
 Expand **Developer details** to inspect canonical values, derived behavior,
 timestamps, interaction count, and elapsed time processed by the latest update.
 Resume the app or poke to obtain a fresh observation. There are no background jobs,
 simulation timers, notifications, or prominent meters.
+While the screen is resumed, a lifecycle-scoped receiver also observes Android's
+[battery and clock broadcasts](https://developer.android.com/develop/background-work/background-tasks/broadcasts).
+Plugging in, unplugging, battery changes, minute ticks, and clock/zone changes refresh
+the phone context without advancing or writing creature state. The receiver stops
+on pause. Selected-app usage is still queried only on resume, poke, or Listen;
+these live updates preserve the last optional app summary and any current thought.
 
 Tap **Listen** for a checked interesting fact, an original gentle joke, or a playful
 observation in the creature's voice. The small catalogue contains 17 materials:
@@ -197,6 +232,21 @@ access or observations leave the ordinary creature and Listen feature working.
 
 ## Verification
 
+Phone reactions: JVM tests cover the low-battery boundary, unknown readings, and
+reaction priority. Emulator tests exercise real battery-service broadcasts, receiver
+cancellation/restart, unchanged Room state, and a Listen response arriving across a
+charging change. Presentation captures cover each reaction while watchful and
+resting, alongside the existing pose and narrow/large-text checks.
+APK assembly, lint, 51 JVM tests, and all 29 instrumented tests pass on the Android
+15 / API 35 emulator. The instrumented suite was run directly through
+`AndroidJUnitRunner` after Gradle's host result collector failed; all 29 tests
+completed with no failures or skips. Screenshot checks post to the main thread
+and wait for specific accessibility content instead of waiting for idle animation.
+
+Familiar Snapshot: APK assembly, lint, 46 JVM tests, and 26 instrumented tests pass
+on the Android 15 / API 35 emulator. All five poses were visually inspected, along
+with unavailable context and a longer thought at enlarged text size.
+
 v0.1b: APK assembly, lint, and 27 JVM tests pass. All five poses were inspected on
 an AOSP Android 15 / API 35 emulator. Updating the installed app preserved the
 existing creature, and a resting poke persisted without waking it.
@@ -232,6 +282,23 @@ Manual acceptance check on a device:
 9. Optionally enable chosen-app observations and Usage Access. Use a selected app,
    then Listen; check the approximate past-hour summary in developer details.
    Disable observations and confirm the summary is no longer included.
+10. With the screen open, plug in/unplug the charger and check that the sparkles
+    and caption follow it. At 20% or below while unplugged, check the amber cue;
+    at night, check the quiet sway. Confirm Developer details still shows the same
+    energy, mode, saved update timestamp, and poke count across live phone updates.
+
+Snapshot presentation checks cover all five poses, the existing poke/Listen
+callbacks, unknown context, voice failure, and the thinking state. A 320 dp layout
+with 1.4× text checks that a longer discovery, its source, and developer details
+remain reachable by scrolling. Tests capture PNGs under the emulator's app-specific
+external files directory, `snapshot-captures/`; the README image is the watchful
+fixture, captured at 1080×2400. Reproduce them on a dedicated emulator:
+
+```powershell
+adb -s emulator-5554 shell wm size 1080x2400
+.\gradlew.bat connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=dev.pocketfamiliar.ui.SnapshotPresentationTest'
+adb -s emulator-5554 shell wm size reset
+```
 
 ## AI voice setup
 

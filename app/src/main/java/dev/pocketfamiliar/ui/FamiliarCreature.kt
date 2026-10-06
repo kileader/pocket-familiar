@@ -10,6 +10,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -46,13 +48,17 @@ import kotlin.math.sin
 
 /** Presentation of a derived behavior. Animation never advances or writes creature state. */
 @Composable
-internal fun FamiliarCreature(behavior: Behavior?, reaction: Long, enabled: Boolean, onPoke: () -> Unit) {
+internal fun FamiliarCreature(
+    behavior: Behavior?, reaction: Long, enabled: Boolean, onPoke: () -> Unit,
+    modifier: Modifier = Modifier,
+    phoneReaction: PhoneReaction? = null,
+) {
     var resumed by remember { mutableStateOf(false) }
     LifecycleResumeEffect(Unit) {
         resumed = true
         onPauseOrDispose { resumed = false }
     }
-    val phase = rememberIdlePhase(active = resumed && enabled, behavior = behavior)
+    val phase = rememberIdlePhase(active = resumed && enabled, behavior = behavior, phoneReaction = phoneReaction)
     val pulse = remember { Animatable(0f) }
     var observedReaction by remember { mutableLongStateOf(reaction) }
     LaunchedEffect(reaction, resumed, behavior) {
@@ -95,18 +101,22 @@ internal fun FamiliarCreature(behavior: Behavior?, reaction: Long, enabled: Bool
     val body = remember { creatureOutline() }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(240.dp)
             .clip(CircleShape)
             .clickable(enabled = enabled, role = Role.Button, onClick = onPoke)
             .semantics {
                 contentDescription = behavior?.let {
-                    "${it.name.lowercase(Locale.ROOT)} creature. Poke gently."
+                    "${it.name.lowercase(Locale.ROOT)} creature. " +
+                        (phoneReaction?.let { cue ->
+                            if (cue == PhoneReaction.LOW_BATTERY && behavior == Behavior.RESTING) "Low-battery reminder. "
+                            else "${cue.description}. "
+                        } ?: "") + "Poke gently."
                 } ?: "Creature loading"
             },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(220.dp)) {
+        Canvas(Modifier.fillMaxSize().padding(10.dp)) {
             // Read animated values in the draw phase, without recomposing the screen each frame.
             val cycle = phase.value
             val breath = sin(cycle * 2 * PI).toFloat()
@@ -121,6 +131,7 @@ internal fun FamiliarCreature(behavior: Behavior?, reaction: Long, enabled: Bool
                 else -> 3f
             }
             val fidget = if (behavior == Behavior.RESTLESS) breath * 1.3f else 0f
+            val nightSway = if (phoneReaction == PhoneReaction.NIGHT) breath * if (resting) 0.6f else 1.5f else 0f
             val blink = if (cycle > 0.94f) abs(cycle - 0.97f) / 0.03f else 1f
             withTransform({ scale(size.width / 220f, size.height / 220f, pivot = Offset.Zero) }) {
                 drawOval(
@@ -130,7 +141,7 @@ internal fun FamiliarCreature(behavior: Behavior?, reaction: Long, enabled: Bool
                 )
                 withTransform({
                     translate(top = -idleLift - pokeLift)
-                    rotate(lean.value + fidget + direction * poke * if (resting) 1.5f else 4f, Offset(110f, 190f))
+                    rotate(lean.value + fidget + nightSway + direction * poke * if (resting) 1.5f else 4f, Offset(110f, 190f))
                     scale(
                         scaleX = width.value + poke * if (resting) 0.008f else 0.018f,
                         scaleY = height.value + breath * 0.012f - poke * 0.008f,
@@ -138,10 +149,11 @@ internal fun FamiliarCreature(behavior: Behavior?, reaction: Long, enabled: Bool
                     )
                 }) {
                     drawPath(body, Color(if (resting) 0xFFA7B9B0 else 0xFFB7D5BA))
-                    drawFace(behavior, poke, blink.coerceIn(0f, 1f), breath)
+                    drawFace(behavior, poke, blink.coerceIn(0f, 1f), breath, phoneReaction)
                     drawCircle(Color(0xFFDCA99B).copy(alpha = 0.35f), 8f, Offset(67f, 136f))
                     drawCircle(Color(0xFFDCA99B).copy(alpha = 0.35f), 8f, Offset(154f, 136f))
                 }
+                drawPhoneCue(phoneReaction, breath)
                 if (resting) {
                     val zColor = Color(0xFFB6D4C4).copy(alpha = 0.6f)
                     val y = 77f - breath * 1.5f
@@ -155,15 +167,15 @@ internal fun FamiliarCreature(behavior: Behavior?, reaction: Long, enabled: Bool
 }
 
 @Composable
-private fun rememberIdlePhase(active: Boolean, behavior: Behavior?): State<Float> {
+private fun rememberIdlePhase(active: Boolean, behavior: Behavior?, phoneReaction: PhoneReaction?): State<Float> {
     if (!active) return remember { mutableFloatStateOf(0f) }
-    return key(behavior) {
+    return key(behavior, phoneReaction) {
         val idle = rememberInfiniteTransition(label = "creature idle")
         idle.animateFloat(
             initialValue = 0f, targetValue = 1f,
             animationSpec = infiniteRepeatable(
                 tween(
-                    durationMillis = when (behavior) {
+                    durationMillis = if (phoneReaction == PhoneReaction.NIGHT) 7_000 else when (behavior) {
                         Behavior.RESTING, Behavior.DROWSY -> 6_000
                         Behavior.RESTLESS -> 4_500
                         Behavior.LIVELY -> 3_800
@@ -177,7 +189,7 @@ private fun rememberIdlePhase(active: Boolean, behavior: Behavior?): State<Float
     }
 }
 
-private fun DrawScope.drawFace(behavior: Behavior?, poke: Float, blink: Float, breath: Float) {
+private fun DrawScope.drawFace(behavior: Behavior?, poke: Float, blink: Float, breath: Float, phoneReaction: PhoneReaction?) {
     val face = Color(0xFF2D4440)
     if (behavior == Behavior.RESTING) {
         for (x in listOf(78f, 128f)) {
@@ -185,13 +197,14 @@ private fun DrawScope.drawFace(behavior: Behavior?, poke: Float, blink: Float, b
         }
     } else {
         val eyeHeight = if (behavior == Behavior.DROWSY) 5f + poke * 7f else 14f + poke * 3f
-        val gaze = if (behavior == Behavior.RESTLESS) breath * 3.5f else 0f
+        val glance = if (phoneReaction == PhoneReaction.LOW_BATTERY) (breath + 1f) / 2f else 0f
+        val gaze = if (glance > 0f) glance * 3f else if (behavior == Behavior.RESTLESS) breath * 3.5f else 0f
         val opening = eyeHeight * blink
         for (x in listOf(84.5f, 135.5f)) {
             if (opening < 2f) {
                 drawLine(face, Offset(x - 6f, 121f), Offset(x + 6f, 121f), 3f, StrokeCap.Round)
             } else {
-                drawOval(face, Offset(x - 4.5f + gaze, 121f - opening / 2), Size(9f, opening))
+                drawOval(face, Offset(x - 4.5f + gaze, 121f - opening / 2 - glance * 2f), Size(9f, opening))
             }
         }
         if (behavior == Behavior.DROWSY) {
@@ -208,6 +221,26 @@ private fun DrawScope.drawFace(behavior: Behavior?, poke: Float, blink: Float, b
         )
         poke > 0.3f && behavior != Behavior.RESTING -> drawOval(face, Offset(108f, 134f), Size(6f, 8f))
         else -> drawLine(face.copy(alpha = 0.7f), Offset(107f, 137f), Offset(114f, 137f), 2.4f, StrokeCap.Round)
+    }
+}
+
+private fun DrawScope.drawPhoneCue(reaction: PhoneReaction?, breath: Float) {
+    when (reaction) {
+        PhoneReaction.CHARGING -> {
+            val glow = Color(0xFFE9CF9B).copy(alpha = 0.65f + breath * 0.2f)
+            for ((center, radius) in listOf(Offset(32f, 93f) to 5f, Offset(186f, 72f) to 7f)) {
+                drawLine(glow, center - Offset(radius, 0f), center + Offset(radius, 0f), 2f, StrokeCap.Round)
+                drawLine(glow, center - Offset(0f, radius), center + Offset(0f, radius), 2f, StrokeCap.Round)
+            }
+        }
+        PhoneReaction.LOW_BATTERY -> {
+            val amber = Color(0xFFE9CF9B).copy(alpha = 0.75f)
+            drawRoundRect(amber, Offset(183f, 91f), Size(20f, 12f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f), style = Stroke(1.5f))
+            drawLine(amber, Offset(205f, 95f), Offset(205f, 99f), 2f, StrokeCap.Round)
+            drawRect(amber, Offset(186f, 94f), Size(3f, 6f))
+        }
+        else -> Unit
     }
 }
 
