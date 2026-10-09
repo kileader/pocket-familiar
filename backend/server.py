@@ -1,4 +1,4 @@
-"""Personal Pocket Familiar voice gateway. No creature database or state mutations."""
+"""Personal voice gateway and optional cognitive storage. Android owns body state."""
 import hmac
 import json
 import math
@@ -10,7 +10,9 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from discoveries import DISCOVERIES
+from free_roam import Conflict, StorageUnavailable, store_from_environment
 
 DEFAULT_MODEL = "gpt-4.1-mini-2025-04-14"
 DAILY_REQUEST_LIMIT = 100  # Per process; resets on restart. Deploy one instance.
@@ -193,7 +195,7 @@ class RequestBudget:
             return True
 
 
-def make_server(address, api_key, access_token, thinker=request_thought):
+def make_server(address, api_key, access_token, thinker=request_thought, free_roam_store=None):
     if not api_key or len(access_token) < 32 or access_token.startswith("sk-") or not all(
         33 <= ord(character) <= 126 for character in access_token
     ):
@@ -219,10 +221,16 @@ def make_server(address, api_key, access_token, thinker=request_thought):
             self.wfile.write(body)
 
         def do_GET(self):
+            if self.path.split("?", 1)[0] == "/free-roam" or self.path.startswith("/free-roam/"):
+                self.free_roam_request("GET")
+                return
             self.send_json(200 if self.path == "/health" else 404,
                            {"status": "ok"} if self.path == "/health" else {"error": "Not found"})
 
         def do_POST(self):
+            if self.path.split("?", 1)[0] == "/free-roam" or self.path.startswith("/free-roam/"):
+                self.free_roam_request("POST")
+                return
             if self.path != "/think":
                 self.send_json(404, {"error": "Not found"})
                 return
@@ -254,12 +262,93 @@ def make_server(address, api_key, access_token, thinker=request_thought):
             finally:
                 busy.release()
 
+        def do_DELETE(self):
+            if self.path.startswith("/free-roam/"):
+                self.free_roam_request("DELETE")
+            else:
+                self.send_json(404, {"error": "Not found"})
+
+        def read_free_roam_json(self):
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) != 1 or self.headers.get("Transfer-Encoding"):
+                raise ValueError("Invalid request framing")
+            length = int(lengths[0])
+            if not 0 < length <= 16384 or self.headers.get_content_type() != "application/json":
+                raise ValueError("Invalid body")
+
+            def unique_fields(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("Duplicate JSON field")
+                    result[key] = value
+                return result
+
+            def invalid_constant(_):
+                raise ValueError("Nonfinite JSON number")
+
+            return json.loads(self.rfile.read(length).decode("utf-8"),
+                              object_pairs_hook=unique_fields, parse_constant=invalid_constant)
+
+        def free_roam_request(self, method):
+            # All cognitive data and controls, including reads, require the owner token.
+            self.close_connection = True
+            if not hmac.compare_digest(self.headers.get("Authorization", "").encode(),
+                                       f"Bearer {access_token}".encode()):
+                self.send_json(401, {"error": "Unauthorized"})
+                return
+            if free_roam_store is None:
+                self.send_json(503, {"error": "Free Roam storage unavailable"})
+                return
+            try:
+                url = urlsplit(self.path)
+                query = parse_qs(url.query, keep_blank_values=True)
+                if method == "GET" and url.path in ("/free-roam/memories", "/free-roam/audit"):
+                    if not query.keys() <= {"after", "limit"} or any(len(values) != 1 or not re.fullmatch(r"[0-9]{1,19}", values[0]) for values in query.values()):
+                        raise ValueError("Invalid page")
+                    result = free_roam_store.page(url.path.rsplit("/", 1)[1],
+                                                 int(query.get("after", ["0"])[0]),
+                                                 int(query.get("limit", ["20"])[0]))
+                elif query:
+                    raise ValueError("Unexpected query")
+                elif method == "GET" and url.path == "/free-roam":
+                    result = free_roam_store.snapshot()
+                elif method == "GET" and url.path == "/free-roam/export":
+                    result = free_roam_store.export()
+                elif method == "POST" and url.path in {
+                    "/free-roam/pair", "/free-roam/controls", "/free-roam/memories",
+                    "/free-roam/interests", "/free-roam/goals", "/free-roam/forget",
+                }:
+                    operation = {
+                        "/free-roam/pair": free_roam_store.pair,
+                        "/free-roam/controls": free_roam_store.update_controls,
+                        "/free-roam/memories": free_roam_store.add_memory,
+                        "/free-roam/interests": free_roam_store.save_interest,
+                        "/free-roam/goals": free_roam_store.save_goal,
+                        "/free-roam/forget": free_roam_store.forget,
+                    }[url.path]
+                    result = operation(self.read_free_roam_json())
+                elif method == "DELETE" and re.fullmatch(r"/free-roam/(memories|interests|goals)/[a-z0-9-]+", url.path):
+                    _, _, collection, entry_id = url.path.split("/")
+                    result = free_roam_store.delete_entry(collection, entry_id, self.read_free_roam_json())
+                else:
+                    self.send_json(404, {"error": "Not found"})
+                    return
+                self.send_json(200, result)
+            except Conflict as error:
+                self.send_json(409, {"error": str(error)})
+            except (ValueError, TypeError, TimeoutError, RecursionError):
+                self.send_json(400, {"error": "Invalid Free Roam request"})
+            except StorageUnavailable:
+                self.send_json(503, {"error": "Free Roam storage unavailable"})
+
     return ThreadingHTTPServer(address, Handler)
 
 
 if __name__ == "__main__":
     server = make_server(("0.0.0.0", int(os.environ.get("PORT", "8080"))),
                          os.environ.get("OPENAI_API_KEY", ""),
-                         os.environ.get("FAMILIAR_ACCESS_TOKEN", ""))
+                         os.environ.get("FAMILIAR_ACCESS_TOKEN", ""),
+                         free_roam_store=store_from_environment())
     print("Pocket Familiar voice gateway ready", flush=True)
     server.serve_forever()

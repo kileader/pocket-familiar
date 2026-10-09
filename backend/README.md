@@ -1,9 +1,12 @@
-# Pocket Familiar voice gateway
+# Pocket Familiar backend
 
 Small personal prototype using Python's standard library and OpenAI's Responses API.
-The Android app owns the creature and SQLite database. This service receives an
+The Android app owns the creature and its Room database. The voice service receives an
 observation and returns text with optional discovery ID and source metadata.
-It has no creature database or state commands. The simulation remains on the phone.
+It has no body-state commands. The simulation remains on the phone. Optional
+[Free Roam storage](FREE_ROAM.md) adds owner-controlled cognitive memory and
+permissions in a separate server SQLite database. This first slice has no
+scheduler, autonomous execution, or web tools; it makes no additional model calls.
 
 ## Deploy on Railway
 
@@ -20,7 +23,9 @@ It has no creature database or state commands. The simulation remains on the pho
      blank, the service uses `gpt-4.1-mini-2025-04-14`. Change this variable and
      deploy the Railway changes to switch models; no Android update is needed.
 5. Deploy. The Dockerfile starts the server on Railway's `PORT`; no start override,
-   volume, database, or other service is needed. Keep one replica.
+   volume, database, or other service is needed for Listen. Keep one replica.
+   Free Roam storage additionally requires the explicit volume setup described
+   in [FREE_ROAM.md](FREE_ROAM.md); the server never initializes it implicitly.
 6. In **Settings → Networking**, generate a public domain. Check
    `https://YOUR-DOMAIN/health`; it should return `{"status":"ok"}`.
 7. Update the Android app. In **Show developer details → Voice service setup**,
@@ -94,6 +99,10 @@ python -m unittest discover -s backend -v
 Tests use fake provider responses, make no paid requests, and cover validation,
 authentication, cooldown/day limits, discovery selection, source metadata,
 legacy compatibility, output filtering, and error isolation.
+Free Roam tests also cover immutable pairing, persistence across store recreation,
+concurrent and stale writes, authenticated reads and controls, limits, owner-note
+provenance, pagination, forgetting, missing/incompatible storage, backup recovery,
+and isolation from the existing Listen provider context.
 Android instrumented voice tests cover state preservation, concurrent pokes,
 discarding stale responses, and continued operation after a voice failure.
 

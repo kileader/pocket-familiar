@@ -12,3 +12,7 @@ local.properties
 .env
 .env.*
 __pycache__/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm

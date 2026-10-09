@@ -122,7 +122,7 @@ persistence/  Room entity/DAO/database and transactional repository
 perception/   Time, battery, optional chosen-app usage sources, observation snapshot
 ui/           ViewModel, Compose screen, and transient visual reaction
 brain/        Read-only context, text/source response, HTTPS client, private preferences
-backend/      Python voice gateway, reviewed catalogue, Railway deployment files
+backend/      Python voice gateway, cognitive storage, reviewed catalogue, Railway files
 ```
 
 `FamiliarApplication` constructs shared dependencies. `MainActivity.onResume()` asks
@@ -327,6 +327,13 @@ Pixel, preserving app data. Interpretation of real selected-app activity still
 needs an owner check after opting in. Older APK requests remain supported with
 the previous short-thought format.
 
+The backend now includes the first [Free Roam memory and controls slice](backend/FREE_ROAM.md):
+explicit persistent storage, immutable pairing, owner notes, interests, research goals,
+permission settings, administrative audit, export, forgetting, and backup recovery.
+It is disabled by default and cannot enable autonomous execution in this build.
+Scheduling, web tools, and Android pairing/journal UI are later slices. The existing
+Room creature and Listen context remain unchanged; there are no new model calls.
+
 This prototype intentionally excludes chat, feeding, health, currencies, quests,
-accounts, and cloud sync. Its open question is experiential: do persistence,
+accounts, and full body-state cloud sync. Its open question is experiential: do persistence,
 autonomous cycles, and simple situated observations make the creature feel continuous?
