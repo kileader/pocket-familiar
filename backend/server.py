@@ -303,7 +303,7 @@ def make_server(address, api_key, access_token, thinker=request_thought, free_ro
             try:
                 url = urlsplit(self.path)
                 query = parse_qs(url.query, keep_blank_values=True)
-                if method == "GET" and url.path in ("/free-roam/memories", "/free-roam/audit"):
+                if method == "GET" and url.path in ("/free-roam/memories", "/free-roam/audit", "/free-roam/journal"):
                     if not query.keys() <= {"after", "limit"} or any(len(values) != 1 or not re.fullmatch(r"[0-9]{1,19}", values[0]) for values in query.values()):
                         raise ValueError("Invalid page")
                     result = free_roam_store.page(url.path.rsplit("/", 1)[1],
@@ -328,7 +328,7 @@ def make_server(address, api_key, access_token, thinker=request_thought, free_ro
                         "/free-roam/forget": free_roam_store.forget,
                     }[url.path]
                     result = operation(self.read_free_roam_json())
-                elif method == "DELETE" and re.fullmatch(r"/free-roam/(memories|interests|goals)/[a-z0-9-]+", url.path):
+                elif method == "DELETE" and re.fullmatch(r"/free-roam/(memories|interests|goals|journal)/[a-z0-9-]+", url.path):
                     _, _, collection, entry_id = url.path.split("/")
                     result = free_roam_store.delete_entry(collection, entry_id, self.read_free_roam_json())
                 else:
@@ -346,9 +346,20 @@ def make_server(address, api_key, access_token, thinker=request_thought, free_ro
 
 
 if __name__ == "__main__":
+    from wake_cycles import WakeWorker
+    store = store_from_environment()
+    api_key = os.environ.get("OPENAI_API_KEY", "")
     server = make_server(("0.0.0.0", int(os.environ.get("PORT", "8080"))),
-                         os.environ.get("OPENAI_API_KEY", ""),
+                         api_key,
                          os.environ.get("FAMILIAR_ACCESS_TOKEN", ""),
-                         free_roam_store=store_from_environment())
+                         free_roam_store=store)
+    worker = WakeWorker(store, api_key) if store is not None else None
+    if worker is not None:
+        worker.start()
     print("Pocket Familiar voice gateway ready", flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        if worker is not None:
+            worker.stop()
+        server.server_close()

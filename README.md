@@ -327,12 +327,14 @@ Pixel, preserving app data. Interpretation of real selected-app activity still
 needs an owner check after opting in. Older APK requests remain supported with
 the previous short-thought format.
 
-The backend now includes the first [Free Roam memory and controls slice](backend/FREE_ROAM.md):
-explicit persistent storage, immutable pairing, owner notes, interests, research goals,
-permission settings, administrative audit, export, forgetting, and backup recovery.
-It is disabled by default and cannot enable autonomous execution in this build.
-Scheduling, web tools, and Android pairing/journal UI are later slices. The existing
-Room creature and Listen context remain unchanged; there are no new model calls.
+The backend now includes [bounded autonomous Free Roam](backend/FREE_ROAM.md):
+persistent identity, notes, interests, and goals; model-selected server wakes;
+one permitted web search per wake; labeled memories and an inspectable journal.
+It is off by default and requires explicit owner activation, persistent storage,
+and a separately enabled domain allowlist for research. Durable reservations,
+daily limits, and recovery prevent duplicate wakes or reset spending after restart.
+Android pairing/journal UI is the next slice. The Room creature and existing Listen
+context remain unchanged. Enabling Free Roam permits additional paid model calls.
 
 This prototype intentionally excludes chat, feeding, health, currencies, quests,
 accounts, and full body-state cloud sync. Its open question is experiential: do persistence,

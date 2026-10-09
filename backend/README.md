@@ -4,9 +4,10 @@ Small personal prototype using Python's standard library and OpenAI's Responses 
 The Android app owns the creature and its Room database. The voice service receives an
 observation and returns text with optional discovery ID and source metadata.
 It has no body-state commands. The simulation remains on the phone. Optional
-[Free Roam storage](FREE_ROAM.md) adds owner-controlled cognitive memory and
-permissions in a separate server SQLite database. This first slice has no
-scheduler, autonomous execution, or web tools; it makes no additional model calls.
+[Free Roam](FREE_ROAM.md) adds owner-controlled cognitive memory and permissions
+in a separate server SQLite database. When explicitly enabled, one background
+worker reviews memories, chooses an activity, and can perform one permitted search.
+Durable wake claims, cost reservations, and a journal make its activity inspectable.
 
 ## Deploy on Railway
 
@@ -24,8 +25,10 @@ scheduler, autonomous execution, or web tools; it makes no additional model call
      deploy the Railway changes to switch models; no Android update is needed.
 5. Deploy. The Dockerfile starts the server on Railway's `PORT`; no start override,
    volume, database, or other service is needed for Listen. Keep one replica.
-   Free Roam storage additionally requires the explicit volume setup described
-   in [FREE_ROAM.md](FREE_ROAM.md); the server never initializes it implicitly.
+   Free Roam additionally requires the explicit volume setup described in
+   [FREE_ROAM.md](FREE_ROAM.md); the server never initializes it implicitly.
+   Schema-1 cognitive stores need the documented operator upgrade before activation.
+   Keep the service running continuously for server wakes.
 6. In **Settings → Networking**, generate a public domain. Check
    `https://YOUR-DOMAIN/health`; it should return `{"status":"ok"}`.
 7. Update the Android app. In **Show developer details → Voice service setup**,
@@ -79,8 +82,8 @@ Railway documentation: [monorepo setup](https://docs.railway.com/guides/deployin
   when returning from a source link. Poking, a new Listen action, or settings
   voice setting changes clear the displayed thought. Slow responses are discarded if state or
   settings changed while waiting; network work never holds the simulation mutex.
-- One in-flight provider request; five-second cooldown; 100 attempts per UTC day
-  per process. Failures also count. There are no automatic retries or background calls.
+- Listen: one in-flight provider request; five-second cooldown; 100 attempts per UTC day
+  per process. Failures also count. Listen has no automatic retries or background calls.
   Counters reset on restart/redeployment and are not a billing hard cap. Use provider
   and Railway spending controls as well. This is for one owner, not a public app.
 - HTTPS is supplied by Railway. The phone refuses plaintext URLs and redirects.
@@ -103,6 +106,11 @@ Free Roam tests also cover immutable pairing, persistence across store recreatio
 concurrent and stale writes, authenticated reads and controls, limits, owner-note
 provenance, pagination, forgetting, missing/incompatible storage, backup recovery,
 and isolation from the existing Listen provider context.
+Wake-cycle tests exercise independent model decisions, filtered source evidence,
+cross-worker claims, restart/clock boundaries, durable daily/monthly accounting,
+pause/forget during execution, interruption recovery, migration, and journal APIs.
+All provider responses in these tests are fake; no paid Free Roam smoke test has
+been performed and this change does not deploy or activate a Railway worker.
 Android instrumented voice tests cover state preservation, concurrent pokes,
 discarding stale responses, and continued operation after a voice failure.
 

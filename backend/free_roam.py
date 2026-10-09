@@ -1,4 +1,4 @@
-"""Owner-controlled cognitive storage. No simulator, scheduler, model calls, or tools."""
+"""Owner-controlled cognitive storage and durable wake accounting. No body simulation."""
 import argparse
 import json
 import math
@@ -8,16 +8,20 @@ import sqlite3
 import time
 import uuid
 from contextlib import closing, contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DATABASE_NAME = "free-roam.sqlite3"
 MAX_MEMORIES = 1000
 MAX_INTERESTS = 10
 MAX_ACTIVE_GOALS = 3
 MAX_GOALS = 100
 MAX_AUDIT_ENTRIES = 1000
+MAX_WAKE_RUNS = 1000
+WAKE_RESERVATION_MICROUSD = 50_000  # Five cents, reserved before any provider request.
+WAKE_LEASE_MS = 300_000
 DEFAULT_CONTROLS = {
     "enabled": False,
     "webEnabled": False,
@@ -26,8 +30,38 @@ DEFAULT_CONTROLS = {
     "dailyWakeLimit": 4,
     "monthlyBudgetCents": 500,
 }
-RUNTIME = {"phase": "memory-and-controls", "autonomousExecutionAvailable": False,
-           "webToolsAvailable": False}
+RUNTIME = {"phase": "bounded-wake-cycles", "autonomousExecutionAvailable": True,
+           "webToolsAvailable": True, "maxModelCallsPerWake": 2, "maxWebCallsPerWake": 1}
+WAKE_SCHEMA = """
+ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'owner_note';
+ALTER TABLE memories ADD COLUMN sources TEXT NOT NULL DEFAULT '[]';
+CREATE TABLE wake_runs (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    day TEXT NOT NULL,
+    month TEXT NOT NULL,
+    status TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    metered_microusd INTEGER NOT NULL DEFAULT 0,
+    charged_microusd INTEGER NOT NULL,
+    visible INTEGER NOT NULL DEFAULT 1,
+    action TEXT,
+    topic TEXT,
+    reason TEXT,
+    question TEXT,
+    summary TEXT,
+    sources TEXT NOT NULL DEFAULT '[]',
+    error_code TEXT
+);
+CREATE TABLE wake_budget (
+    month TEXT PRIMARY KEY,
+    charged_microusd INTEGER NOT NULL CHECK (charged_microusd >= 0)
+);
+PRAGMA user_version = 2;
+"""
 SCHEMA = """
 BEGIN IMMEDIATE;
 CREATE TABLE profile (
@@ -73,8 +107,7 @@ CREATE TABLE audit (
     details TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
-PRAGMA user_version = 1;
-"""
+""" + WAKE_SCHEMA
 
 
 class Conflict(ValueError):
@@ -178,6 +211,33 @@ def initialize(data_dir):
     return path
 
 
+def migrate(data_dir, backup_path):
+    """Explicit, additive v1 upgrade. Preserve a consistent backup before changing schema."""
+    path = database_path(data_dir)
+    with closing(sqlite3.connect(path.as_uri() + "?mode=rw", uri=True)) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version == SCHEMA_VERSION:
+            FreeRoamStore(data_dir).snapshot()
+            return
+        if version != 1:
+            raise StorageUnavailable("Unsupported Free Roam schema")
+        connection.row_factory = sqlite3.Row
+        FreeRoamStore._settings(connection)
+        target = Path(backup_path)
+        if not target.is_absolute() or not target.parent.is_dir():
+            raise ValueError("Use an absolute backup path")
+        descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        with closing(sqlite3.connect(target)) as copy:
+            connection.backup(copy)
+        try:
+            connection.executescript("BEGIN IMMEDIATE;\n" + WAKE_SCHEMA)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+
 class FreeRoamStore:
     def __init__(self, data_dir, clock=None):
         # Keep the configured path: a missing directory must not turn into a new store.
@@ -253,8 +313,9 @@ class FreeRoamStore:
 
     @staticmethod
     def _memory(row):
-        return {"sequence": row["sequence"], "id": row["id"], "kind": "owner_note",
-                "topic": row["topic"], "text": row["text"], "createdAt": row["created_at"]}
+        return {"sequence": row["sequence"], "id": row["id"], "kind": row["kind"],
+                "topic": row["topic"], "text": row["text"], "createdAt": row["created_at"],
+                "sources": json.loads(row["sources"])}
 
     @staticmethod
     def _interest(row):
@@ -272,10 +333,24 @@ class FreeRoamStore:
         return {"sequence": row["sequence"], "action": row["action"],
                 "details": json.loads(row["details"]), "createdAt": row["created_at"]}
 
+    @staticmethod
+    def _run(row):
+        return {"sequence": row["sequence"], "id": row["id"], "startedAt": row["started_at"],
+                "finishedAt": row["finished_at"], "status": row["status"], "action": row["action"],
+                "topic": row["topic"], "reason": row["reason"], "question": row["question"], "summary": row["summary"],
+                "sources": json.loads(row["sources"]), "errorCode": row["error_code"],
+                "modelCalls": row["calls"], "chargedMicrousd": row["charged_microusd"]}
+
     def _snapshot(self, connection):
         revision, controls = self._settings(connection)
+        last = connection.execute("SELECT * FROM wake_runs ORDER BY sequence DESC LIMIT 1").fetchone()
         return {"revision": revision, "profile": self._profile(connection), "controls": controls,
                 "runtime": dict(RUNTIME),
+                "execution": {"lastWakeAt": None if last is None else last["started_at"],
+                              "lastStatus": None if last is None else last["status"],
+                              "nextWakeAt": None if last is None else last["started_at"] + controls["wakeIntervalHours"] * 3_600_000,
+                              "monthlyCharges": [dict(row) for row in connection.execute(
+                                  "SELECT month, charged_microusd AS chargedMicrousd FROM wake_budget ORDER BY month DESC LIMIT 12")]},
                 "memoryCount": connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0],
                 "interests": [self._interest(row) for row in connection.execute("SELECT * FROM interests ORDER BY priority DESC, id")],
                 "goals": [self._goal(row) for row in connection.execute("SELECT * FROM goals ORDER BY priority DESC, id")]}
@@ -311,8 +386,6 @@ class FreeRoamStore:
             self._check_revision(connection, raw["expectedRevision"])
             revision, controls = self._settings(connection)
             updated = validate_controls(controls | changes)
-            if updated["enabled"]:
-                raise Conflict("Autonomous execution is not available in this build")
             if controls != updated:
                 connection.execute("UPDATE settings SET controls = ? WHERE singleton = 1", (json.dumps(updated),))
                 revision = self._audit(connection, "controls_updated", {"fields": sorted(changes)})
@@ -385,12 +458,18 @@ class FreeRoamStore:
     def delete_entry(self, collection, entry_id, raw):
         fields(raw, ("expectedRevision",))
         identifier(entry_id)
-        if collection not in ("memories", "interests", "goals"):
+        if collection not in ("memories", "interests", "goals", "journal"):
             raise ValueError("Unknown collection")
         with self._transaction(write=True) as connection:
             self._check_revision(connection, raw["expectedRevision"])
             # Table names come exclusively from the allowlist above; values are bound.
-            deleted = connection.execute(f"DELETE FROM {collection} WHERE id = ?", (entry_id,)).rowcount
+            if collection == "journal":
+                deleted = connection.execute("UPDATE wake_runs SET visible = 0 WHERE id = ? AND visible = 1", (entry_id,)).rowcount
+                connection.execute("DELETE FROM memories WHERE id = ? AND kind != 'owner_note'", (entry_id,))
+            else:
+                deleted = connection.execute(f"DELETE FROM {collection} WHERE id = ?", (entry_id,)).rowcount
+            if deleted and collection in ("memories", "journal"):
+                self._redact_runs(connection, "id = ?", (entry_id,))
             revision = self._settings(connection)[0]
             if deleted:
                 revision = self._audit(connection, "entry_forgotten", {"collection": collection, "id": entry_id})
@@ -399,12 +478,13 @@ class FreeRoamStore:
     def page(self, collection, after=0, limit=20):
         integer(after, 0, 2**63 - 1)
         integer(limit, 1, 50)
-        if collection not in ("memories", "audit"):
+        if collection not in ("memories", "audit", "journal"):
             raise ValueError("Unknown collection")
         with self._transaction() as connection:
-            rows = connection.execute(f"SELECT * FROM {collection} WHERE sequence > ? ORDER BY sequence LIMIT ?",
+            table, condition = ("wake_runs", "visible = 1 AND ") if collection == "journal" else (collection, "")
+            rows = connection.execute(f"SELECT * FROM {table} WHERE {condition}sequence > ? ORDER BY sequence LIMIT ?",
                                       (after, limit + 1)).fetchall()
-            convert = self._memory if collection == "memories" else self._event
+            convert = {"memories": self._memory, "audit": self._event, "journal": self._run}[collection]
             items = [convert(row) for row in rows[:limit]]
             return {"revision": self._settings(connection)[0], "items": items,
                     "nextCursor": items[-1]["sequence"] if len(rows) > limit else None}
@@ -415,6 +495,7 @@ class FreeRoamStore:
                 "schemaVersion": SCHEMA_VERSION, "exportedAt": self.clock(),
                 "memories": [self._memory(row) for row in connection.execute("SELECT * FROM memories ORDER BY sequence")],
                 "audit": [self._event(row) for row in connection.execute("SELECT * FROM audit ORDER BY sequence")],
+                "journal": [self._run(row) for row in connection.execute("SELECT * FROM wake_runs WHERE visible = 1 ORDER BY sequence")],
             }
 
     def forget(self, raw):
@@ -425,10 +506,118 @@ class FreeRoamStore:
             self._check_revision(connection, raw["expectedRevision"])
             for table in ("memories", "interests", "goals", "audit"):
                 connection.execute(f"DELETE FROM {table}")
+            self._redact_runs(connection, "1 = 1", ())
             controls = self._settings(connection)[1] | {"enabled": False, "webEnabled": False}
             connection.execute("UPDATE settings SET controls = ? WHERE singleton = 1", (json.dumps(controls),))
             self._audit(connection, "cognitive_memory_forgotten", {})
             return self._snapshot(connection)
+
+    @staticmethod
+    def _redact_runs(connection, predicate, parameters):
+        # Keep content-free receipts: forgetting must not reset spending or scheduling.
+        connection.execute(f"""UPDATE wake_runs SET visible = 0, action = NULL, topic = NULL,
+            reason = NULL, question = NULL, summary = NULL, sources = '[]', error_code = NULL,
+            status = CASE WHEN status = 'running' THEN 'cancelled' ELSE status END
+            WHERE {predicate}""", parameters)
+
+    def claim_wake(self):
+        """Atomically claim one due wake and reserve its worst-case cost. Never replay it."""
+        now = self.clock()
+        date = datetime.fromtimestamp(now / 1000, timezone.utc)
+        day, month = date.strftime("%Y-%m-%d"), date.strftime("%Y-%m")
+        with self._transaction(write=True) as connection:
+            # A lost worker remains charged its full reservation, even after restart.
+            expired = connection.execute("""UPDATE wake_runs SET status = 'interrupted', finished_at = ?,
+                error_code = 'worker_lost' WHERE status = 'running' AND started_at <= ?""",
+                (now, now - WAKE_LEASE_MS)).rowcount
+            if expired:
+                self._audit(connection, "wake_interrupted", {"count": expired})
+            revision, controls = self._settings(connection)
+            if not controls["enabled"] or self._profile(connection) is None:
+                return None
+            last = connection.execute("SELECT * FROM wake_runs ORDER BY sequence DESC LIMIT 1").fetchone()
+            if last is not None and (last["status"] == "running" or now < last["started_at"] + controls["wakeIntervalHours"] * 3_600_000):
+                return None
+            if connection.execute("SELECT COUNT(*) FROM wake_runs WHERE day = ?", (day,)).fetchone()[0] >= controls["dailyWakeLimit"]:
+                return None
+            if (connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0] >= MAX_MEMORIES or
+                    connection.execute("SELECT COUNT(*) FROM wake_runs").fetchone()[0] >= MAX_WAKE_RUNS):
+                return None
+            row = connection.execute("SELECT charged_microusd FROM wake_budget WHERE month = ?", (month,)).fetchone()
+            spent = 0 if row is None else row[0]
+            if spent + WAKE_RESERVATION_MICROUSD > controls["monthlyBudgetCents"] * 10_000:
+                return None
+            run_id = str(uuid.uuid4())
+            revision = self._audit(connection, "wake_started", {"id": run_id})
+            connection.execute("""INSERT INTO wake_runs(id, started_at, day, month, status, revision, charged_microusd)
+                VALUES (?, ?, ?, ?, 'running', ?, ?)""", (run_id, now, day, month, revision, WAKE_RESERVATION_MICROUSD))
+            connection.execute("""INSERT INTO wake_budget VALUES (?, ?) ON CONFLICT(month)
+                DO UPDATE SET charged_microusd = charged_microusd + excluded.charged_microusd""", (month, WAKE_RESERVATION_MICROUSD))
+            context = {"curiosity": self._profile(connection)["curiosity"],
+                       "interests": [self._interest(row) for row in connection.execute("SELECT * FROM interests ORDER BY priority DESC LIMIT 10")],
+                       "goals": [self._goal(row) for row in connection.execute("SELECT * FROM goals WHERE status = 'active' ORDER BY priority DESC LIMIT 3")],
+                       "memories": [self._memory(row) for row in connection.execute("SELECT * FROM memories ORDER BY sequence DESC LIMIT 8")],
+                       "recentJournal": [self._run(row) for row in connection.execute("SELECT * FROM wake_runs WHERE visible = 1 AND status != 'running' ORDER BY sequence DESC LIMIT 4")]}
+            # Explicit projection keeps timestamps, identity IDs, and accounting off the provider.
+            context["interests"] = [{key: item[key] for key in ("topic", "priority")} for item in context["interests"]]
+            context["goals"] = [{key: item[key] for key in ("topic", "question", "priority")} for item in context["goals"]]
+            context["memories"] = [{key: item[key] for key in ("kind", "topic", "text", "sources")} for item in context["memories"]]
+            context["recentJournal"] = [{key: item[key] for key in ("status", "action", "topic", "question", "summary")} for item in context["recentJournal"]]
+            return {"id": run_id, "revision": revision, "controls": controls, "context": context}
+
+    def begin_wake_call(self, claim, web=False):
+        """Recheck consent at every call boundary; owner edits invalidate old context."""
+        with self._transaction(write=True) as connection:
+            row = connection.execute("SELECT * FROM wake_runs WHERE id = ?", (claim["id"],)).fetchone()
+            revision, controls = self._settings(connection)
+            if (row is None or row["status"] != "running" or revision != claim["revision"] or row["revision"] != claim["revision"] or
+                    not controls["enabled"] or self.clock() >= row["started_at"] + WAKE_LEASE_MS or
+                    row["calls"] >= 2 or row["metered_microusd"] >= WAKE_RESERVATION_MICROUSD or
+                    (web and (not controls["webEnabled"] or not controls["allowedDomains"]))):
+                return False
+            connection.execute("UPDATE wake_runs SET calls = calls + 1 WHERE id = ?", (claim["id"],))
+            return True
+
+    def record_wake_decision(self, claim, decision):
+        with self._transaction(write=True) as connection:
+            if self._settings(connection)[0] != claim["revision"]:
+                return False
+            return bool(connection.execute("""UPDATE wake_runs SET action = ?, topic = ?, reason = ?, question = ?
+                WHERE id = ? AND status = 'running' AND visible = 1""",
+                (decision["action"], decision["topic"], decision["reason"], decision["question"], claim["id"])).rowcount)
+
+    def meter_wake_call(self, claim, cost):
+        integer(cost, 0, 2**63 - 1)
+        with self._transaction(write=True) as connection:
+            connection.execute("UPDATE wake_runs SET metered_microusd = metered_microusd + ? WHERE id = ?", (cost, claim["id"]))
+
+    def finish_wake(self, claim, outcome=None, error_code=None, usage_known=True):
+        """Persist only a still-authorized result, and settle cost even after cancellation."""
+        with self._transaction(write=True) as connection:
+            row = connection.execute("SELECT * FROM wake_runs WHERE id = ?", (claim["id"],)).fetchone()
+            if row is None or row["status"] not in ("running", "cancelled") or row["finished_at"] is not None:
+                return
+            revision, controls = self._settings(connection)
+            valid = (row["status"] == "running" and row["visible"] and controls["enabled"] and
+                     revision == claim["revision"] == row["revision"] and self.clock() < row["started_at"] + WAKE_LEASE_MS)
+            cost = row["metered_microusd"] if usage_known else max(row["metered_microusd"], WAKE_RESERVATION_MICROUSD)
+            connection.execute("UPDATE wake_budget SET charged_microusd = charged_microusd + ? WHERE month = ?",
+                               (cost - row["charged_microusd"], row["month"]))
+            status = "cancelled" if not valid else "failed" if error_code else "completed"
+            connection.execute("UPDATE wake_runs SET status = ?, finished_at = ?, charged_microusd = ?, error_code = ? WHERE id = ?",
+                               (status, self.clock(), cost, error_code if valid else None, claim["id"]))
+            if cost > WAKE_RESERVATION_MICROUSD:
+                connection.execute("UPDATE settings SET controls = ? WHERE singleton = 1", (json.dumps(controls | {"enabled": False}),))
+                self._audit(connection, "wake_budget_overrun", {"id": claim["id"]})
+            if valid and outcome is not None and not error_code:
+                connection.execute("UPDATE wake_runs SET action = ?, topic = ?, reason = ?, summary = ?, sources = ? WHERE id = ?",
+                    (outcome["action"], outcome["topic"], outcome["reason"], outcome["summary"], json.dumps(outcome["sources"]), claim["id"]))
+                if outcome["action"] != "rest":
+                    kind = "finding" if outcome["sources"] else "reflection"
+                    connection.execute("INSERT INTO memories(id, topic, text, created_at, kind, sources) VALUES (?, ?, ?, ?, ?, ?)",
+                        (claim["id"], outcome["topic"], outcome["summary"], self.clock(), kind, json.dumps(outcome["sources"])))
+            self._audit(connection, "wake_finished", {"id": claim["id"], "status": status})
+            return status
 
     def backup(self, destination):
         target = Path(destination)
@@ -452,19 +641,22 @@ def store_from_environment():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "backup"))
+    parser.add_argument("command", choices=("init", "backup", "migrate"))
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output")
     args = parser.parse_args()
     try:
         if args.command == "init":
             initialize(args.data_dir)
-            print("Free Roam storage initialized; autonomous execution is unavailable and disabled.")
+            print("Free Roam storage initialized; autonomous execution is disabled by default.")
+        elif args.command == "migrate" and args.output:
+            migrate(args.data_dir, args.output)
+            print("Free Roam storage upgraded; existing identity and content preserved.")
         elif args.output:
             FreeRoamStore(args.data_dir).backup(args.output)
             print("Free Roam SQLite backup saved.")
         else:
-            parser.error("backup requires --output")
+            parser.error("backup and migrate require --output")
     except (OSError, sqlite3.Error, ValueError, StorageUnavailable):
         parser.exit(1, "Free Roam storage operation failed; check the path, permissions, and schema.\n")
 

@@ -55,8 +55,8 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(state["profile"])
         self.assertEqual(state["controls"], DEFAULT_CONTROLS)
         self.assertEqual(state["revision"], 0)
-        self.assertFalse(state["runtime"]["autonomousExecutionAvailable"])
-        self.assertFalse(state["runtime"]["webToolsAvailable"])
+        self.assertTrue(state["runtime"]["autonomousExecutionAvailable"])
+        self.assertTrue(state["runtime"]["webToolsAvailable"])
         self.assertEqual(state["memoryCount"], 0)
 
     def test_pairing_preserves_identity_and_retries_do_not_duplicate_audit(self):
@@ -112,12 +112,12 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(restored["controls"]["enabled"])
         self.assertEqual(restored["memories"][0]["kind"], "owner_note")
 
-    def test_current_build_cannot_enable_execution(self):
+    def test_execution_requires_an_explicit_owner_control_change(self):
         self.pair()
-        before = self.store.export()
-        with self.assertRaises(Conflict):
-            self.store.update_controls({"expectedRevision": self.revision(), "enabled": True})
-        self.assertEqual(self.store.export(), before)
+        self.assertFalse(self.store.snapshot()["controls"]["enabled"])
+        result = self.store.update_controls({"expectedRevision": self.revision(), "enabled": True})
+        self.assertTrue(result["controls"]["enabled"])
+        self.assertEqual(self.store.page("journal")["items"], [])
 
     def test_control_validation_is_atomic_and_enforces_limits(self):
         self.pair()
@@ -297,7 +297,7 @@ class StoreTests(unittest.TestCase):
                 operation()
         with closing(sqlite3.connect(self.path)) as connection, connection:
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 99)
-            connection.execute("PRAGMA user_version = 1")
+            connection.execute("PRAGMA user_version = 2")
             connection.execute("UPDATE settings SET controls = 'broken JSON'")
         with self.assertRaises(StorageUnavailable):
             self.store.snapshot()
@@ -437,7 +437,7 @@ class FreeRoamHttpTests(unittest.TestCase):
 
     def test_invalid_and_stale_writes_are_isolated(self):
         state = self.pair()
-        self.assertEqual(self.request("POST", "/free-roam/controls", {"expectedRevision": state["revision"], "enabled": True})[0], 409)
+        self.assertEqual(self.request("POST", "/free-roam/controls", {"expectedRevision": state["revision"], "enabled": "true"})[0], 400)
         self.assertEqual(self.request("POST", "/free-roam/controls", {"expectedRevision": state["revision"], "webEnabled": True})[0], 400)
         self.assertEqual(self.request("POST", "/free-roam/controls", {"expectedRevision": 0, "dailyWakeLimit": 2})[0], 409)
         self.assertEqual(self.store.snapshot(), state)
