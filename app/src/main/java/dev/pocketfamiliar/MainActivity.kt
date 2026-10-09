@@ -9,6 +9,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.Lifecycle
@@ -17,10 +21,14 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.pocketfamiliar.ui.FamiliarScreen
 import dev.pocketfamiliar.ui.FamiliarViewModel
+import dev.pocketfamiliar.ui.FreeRoamScreen
+import dev.pocketfamiliar.ui.FreeRoamViewModel
+import dev.pocketfamiliar.roam.RoamIdentity
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var familiarViewModel: FamiliarViewModel
+    private lateinit var freeRoamViewModel: FreeRoamViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,6 +42,9 @@ class MainActivity : ComponentActivity() {
             FamiliarViewModel.Factory(familiarApplication.repository, familiarApplication.perception,
                 familiarApplication.brain, familiarApplication.brainSettings, familiarApplication.discoveryHistory),
         )[FamiliarViewModel::class.java]
+        freeRoamViewModel = ViewModelProvider(this,
+            FreeRoamViewModel.Factory(familiarApplication.brainSettings,
+                familiarApplication.freeRoamBindings, familiarApplication.freeRoamClient))[FreeRoamViewModel::class.java]
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -53,14 +64,36 @@ class MainActivity : ComponentActivity() {
                 ),
             ) {
                 val uiState by familiarViewModel.uiState.collectAsStateWithLifecycle()
+                val roamState by freeRoamViewModel.uiState.collectAsStateWithLifecycle()
+                var journalOpen by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(journalOpen, uiState.update?.state?.createdAt) {
+                    if (journalOpen) uiState.update?.state?.let {
+                        freeRoamViewModel.open(RoamIdentity(it.createdAt, it.curiosity))
+                    } else freeRoamViewModel.close()
+                }
                 Surface {
-                    FamiliarScreen(
-                        state = uiState,
-                        onPoke = familiarViewModel::poke,
-                        onRefresh = familiarViewModel::refresh,
-                        onListen = familiarViewModel::listen,
-                        onSaveBrainSettings = familiarViewModel::saveBrainSettings,
-                    )
+                    if (journalOpen) FreeRoamScreen(roamState,
+                        onBack = { journalOpen = false; freeRoamViewModel.close() },
+                        onRefresh = freeRoamViewModel::refresh,
+                        onConnect = freeRoamViewModel::connect,
+                        onSaveControls = freeRoamViewModel::saveControls,
+                        onLoadOlder = freeRoamViewModel::loadOlder,
+                        onForget = freeRoamViewModel::forget,
+                        onDeleteEntry = freeRoamViewModel::deleteEntry)
+                    else {
+                        FamiliarScreen(
+                            state = uiState,
+                            onPoke = familiarViewModel::poke,
+                            onRefresh = familiarViewModel::refresh,
+                            onListen = familiarViewModel::listen,
+                            onSaveBrainSettings = { endpoint, token ->
+                                val previous = familiarApplication.brainSettings.read()
+                                familiarViewModel.saveBrainSettings(endpoint, token)
+                                if (previous != familiarApplication.brainSettings.read()) freeRoamViewModel.settingsChanged()
+                            },
+                            onOpenFreeRoam = { journalOpen = true },
+                        )
+                    }
                 }
             }
         }
@@ -69,5 +102,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         familiarViewModel.refresh()
+        freeRoamViewModel.refreshIfOpen()
     }
 }

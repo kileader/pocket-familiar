@@ -1,16 +1,17 @@
 # Pocket Familiar
 
-An Android prototype about a small creature that continues to exist between visits.
-v0.2b adds mixed discoveries and optional observations of chosen apps to the v0.2a
-AI voice, v0.1b visual expression, and v0.1a persistent simulation.
-There is one creature, one screen, a poke, and an on-demand **Listen** action.
-The **Familiar Snapshot** screen brings its pose, phone context, current thought,
-and a little shared history into one view.
+An Android familiar with persistent body state and optional autonomous server activity.
+v0.3 adds a **Free Roam journal**, explicit pairing, permissions, and spending limits
+to the existing creature snapshot, poke, and on-demand **Listen** action.
+The **Familiar Snapshot** brings its pose, phone context, current thought, and a
+little shared history into one view. When enabled, Free Roam chooses activities
+while Android is closed, retaining experiences that enter future decision context.
 
-The database is canon. The simulation owns state. Behavior is derived from that state;
-phone observations do not change it. AI interprets a read-only snapshot and returns
-words only. It cannot change state. The creature works offline; listening needs a
-configured hosted backend and internet.
+The Android database is canon for the body. The simulation owns its state; behavior
+is derived from that state, and phone observations do not change it. Listen interprets
+a read-only snapshot. Free Roam owns separate cognitive memories on the backend
+within owner permissions; neither AI path can change the body. The creature works
+offline; listening and the journal need a configured hosted backend and internet.
 
 <p>
   <img src="docs/screenshots/familiar-snapshot.png" alt="Familiar Snapshot: a watchful creature, evening and charging context, a short thought, and saved history" width="320">
@@ -90,7 +91,7 @@ Earlier pose captures from v0.1b using controlled test states.
 
 Expand **Developer details** to inspect canonical values, derived behavior,
 timestamps, interaction count, and elapsed time processed by the latest update.
-Resume the app or poke to obtain a fresh observation. There are no background jobs,
+Resume the app or poke to obtain a fresh observation. There are no Android background jobs,
 simulation timers, notifications, or prominent meters.
 While the screen is resumed, a lifecycle-scoped receiver also observes Android's
 [battery and clock broadcasts](https://developer.android.com/develop/background-work/background-tasks/broadcasts).
@@ -122,6 +123,7 @@ persistence/  Room entity/DAO/database and transactional repository
 perception/   Time, battery, optional chosen-app usage sources, observation snapshot
 ui/           ViewModel, Compose screen, and transient visual reaction
 brain/        Read-only context, text/source response, HTTPS client, private preferences
+roam/         Typed owner API client, journal records, private pairing binding
 backend/      Python voice gateway, cognitive storage, reviewed catalogue, Railway files
 ```
 
@@ -146,7 +148,9 @@ The only Room table is `creature`, with a single row identified by `1`:
 
 Behavior, environmental observations, animation state, and debug elapsed time are
 not persisted. Voice settings, optional app selections, and eight recent discovery
-IDs live in private preferences; none are canonical creature state.
+IDs live in private preferences; Free Roam retry UUIDs/server IDs do too. None are
+canonical creature state. Free Roam has a separate ViewModel and never accesses
+the simulator, perception sources, or Room repository.
 `CreatureState` has no Android, Room, UI, or model dependency; its
 primitive fields and enum names can be serialized for a future export. `CreatureBrain`
 consumes state and an environment snapshot and returns a short text response. Network
@@ -231,6 +235,16 @@ incomplete, so these are estimates rather than precise activity records. Missing
 access or observations leave the ordinary creature and Listen feature working.
 
 ## Verification
+
+Free Roam Android v0.3: APK assembly, lint, 58 JVM tests, 102 mocked backend
+tests, and all 45 instrumented tests pass on the Android 15 / API 35 emulator.
+After the full instrumented suite, the 16 Free Roam tests were rerun at a true
+320 dp screen width with enlarged-text captures. Tests cover lost pairing
+responses, explicit adoption, missing/mismatched identity, backend changes,
+revision conflicts without write retries, deletion followed by failed refresh,
+pagination, actual navigation, paid consent, and safe source links. Synthetic
+screenshots were visually inspected. No live provider calls, Railway deployment,
+or physical-device installation were performed for this slice.
 
 Phone reactions: JVM tests cover the low-battery boundary, unknown readings, and
 reaction priority. Emulator tests exercise real battery-service broadcasts, receiver
@@ -333,8 +347,16 @@ one permitted web search per wake; labeled memories and an inspectable journal.
 It is off by default and requires explicit owner activation, persistent storage,
 and a separately enabled domain allowlist for research. Durable reservations,
 daily limits, and recovery prevent duplicate wakes or reset spending after restart.
-Android pairing/journal UI is the next slice. The Room creature and existing Listen
-context remain unchanged. Enabling Free Roam permits additional paid model calls.
+Android v0.3 adds **Free Roam journal** beneath the familiar snapshot. It shows
+latest activity, source links, estimated costs, and failures, with older-page
+loading. Explicit pairing preserves the original creature. Permissions and limits
+cover web search/domain access, wake interval, daily count, and monthly API budget;
+starting requires confirmation of paid server wakes. Pause and confirmed memory
+deletion are also available. Configure the existing voice connection first and
+update/provision the backend using the instructions above. Server wakes require
+Railway to remain running. Android keeps journal text in memory only and adds no
+background job. The Room creature and existing Listen context remain unchanged.
+Enabling Free Roam permits additional paid model calls.
 
 This prototype intentionally excludes chat, feeding, health, currencies, quests,
 accounts, and full body-state cloud sync. Its open question is experiential: do persistence,

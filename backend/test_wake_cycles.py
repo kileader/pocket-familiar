@@ -108,6 +108,27 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(self.store.page("journal")["items"][0]["action"], "rest")
         self.assertEqual(self.store.export()["memories"], [])
 
+    def test_newest_journal_cursor_preserves_ascending_clients_and_skips_redacted_receipts(self):
+        self.enable()
+        for _ in range(4):
+            self.assertEqual(self.worker(plan("rest")).run_once(), "completed")
+            self.now += 6 * 3_600_000
+        ascending = self.store.page("journal")["items"]
+        first = self.store.page("journal", before=2**63 - 1, limit=2)
+        self.assertEqual(first["items"], list(reversed(ascending[2:])))
+        self.assertEqual(first["nextCursor"], ascending[2]["sequence"])
+        self.store.delete_entry("journal", ascending[1]["id"], {"expectedRevision": self.store.snapshot()["revision"]})
+        second = self.store.page("journal", before=first["nextCursor"], limit=2)
+        self.assertEqual(second["items"], ascending[:1])
+        self.assertIsNone(second["nextCursor"])
+        self.assertGreater(second["revision"], first["revision"])
+        self.assertEqual(self.store.page("journal", before=0)["items"], [])
+        for changes in ({"before": -1}, {"before": True}, {"before": 2**63}, {"before": 1, "after": 1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.store.page("journal", **changes)
+        with self.assertRaises(ValueError):
+            self.store.page("memories", before=10)
+
     def test_exploration_and_research_use_one_domain_filtered_search_and_keep_evidence(self):
         self.enable(webEnabled=True, allowedDomains=["nasa.gov"])
         for action in ("explore", "research"):
@@ -487,6 +508,15 @@ class JournalHttpTests(unittest.TestCase):
         self.request("POST", "/free-roam/controls", {"expectedRevision": state["revision"], "enabled": True})
         self.assertEqual(self.request("GET", "/free-roam/journal")[1]["items"], [])
         self.assertEqual(self.calls, [])
+
+    def test_newest_cursor_is_journal_only_and_rejects_ambiguous_queries(self):
+        self.pair()
+        self.assertEqual(self.request("GET", "/free-roam/journal?before=9223372036854775807&limit=20")[0], 200)
+        for path in ("journal?before=-1", "journal?before=9223372036854775808",
+                     "journal?before=1&after=0", "journal?before=1&before=2",
+                     "journal?before=", "memories?before=1", "audit?before=1"):
+            with self.subTest(path=path):
+                self.assertEqual(self.request("GET", "/free-roam/" + path)[0], 400)
 
 
 class MigrationTests(unittest.TestCase):

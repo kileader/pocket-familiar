@@ -2,15 +2,16 @@
 
 The backend can now wake independently of Android, review persistent context,
 choose explore/research/reflect/rest with a model, perform one permitted web search,
-and retain a journal and labeled memories. It is off by default. There is no
-Android pairing client or journal UI yet; owner control and inspection use the API.
+and retain a journal and labeled memories. It is off by default. Android's
+**Free Roam journal** provides pairing, inspection, permissions, and limits;
+owner notes, interest/goal editing, and export remain available through the API.
 
 The Android Room row remains canonical for the body. Pairing stores only its
 original creation timestamp and fixed curiosity trait as identity metadata.
 Energy, stimulation, mode, interaction history, and phone observations are rejected
 by these APIs. Nothing from this store is added to the existing `/think` payload.
 An authenticated pairing request is consent to persist those two identity fields.
-Creation timestamps and identity IDs remain on the backend. Explicitly enabling
+Creation timestamps and identity IDs are not sent to the provider. Explicitly enabling
 Free Roam additionally permits sending curiosity, interests, active goals, recent
 notes, and recent experiences to OpenAI. Phone observations remain excluded.
 
@@ -95,6 +96,7 @@ the provider key is stored in the cognitive database or export.
 | `GET /free-roam/memories?after=0&limit=20` | Read notes using sequence cursors; maximum page size 50 |
 | `GET /free-roam/audit?after=0&limit=20` | Inspect administrative changes, not agent experiences |
 | `GET /free-roam/journal?after=0&limit=20` | Inspect real wake attempts, decisions, findings, costs, and failures |
+| `GET /free-roam/journal?before=9223372036854775807&limit=20` | Newest entries first; use `nextCursor` as the next `before` value |
 | `DELETE /free-roam/{memories,interests,goals,journal}/{id}` | Remove content; deleting an agent memory also redacts its journal entry and vice versa |
 | `GET /free-roam/export` | Consistent JSON export of identity, settings, knowledge, audit, visible journal, and recent monthly accounting |
 | `POST /free-roam/forget` | Erase cognitive content and prior audit, revoke web permission, and preserve identity |
@@ -105,7 +107,52 @@ Use the real existing Room creation timestamp (UTC epoch milliseconds) and curio
 not example values, when pairing production. The generated `familiarId` is stable
 across restarts and backup recovery. A different pairing ID or changed identity
 fields return HTTP 409; there is no API to replace the paired familiar. Retain
-the pairing ID for retries. Android wiring will be added in the app slice.
+the pairing ID for retries. Android persists it before its first request.
+
+The journal's optional `before` cursor reads descending sequence numbers strictly
+below the cursor, excluding redacted content. It cannot be combined with `after`
+and is rejected on other collections. Existing `after` clients retain ascending
+behavior. `nextCursor` is null on the last page; otherwise it is the last item's
+sequence. Each page carries the current revision so clients can reload rather
+than combine pages across a concurrent wake or deletion. This requires no schema
+change.
+
+## Android inspection and control
+
+Update the backend to this version before using the Android v0.3 journal. Open
+**Free Roam journal** beneath the familiar snapshot; it reuses the saved voice
+HTTPS URL and owner access token. No OpenAI key belongs on the phone.
+
+1. Review and explicitly confirm **Pair existing familiar**. The app uploads only
+   the Room row's original creation time and fixed curiosity. New pairing keeps
+   Free Roam paused. An already matching remote profile can be adopted explicitly
+   through **Connect existing pairing**.
+2. Open **Permissions and limits**, choose the interval, daily wake count, and
+   monthly API budget, then save. Web search requires its separate switch and
+   a nonempty domain allowlist. Saving these controls does not start a paused agent.
+3. Tap **Start Free Roam** and confirm the notice about sending cognitive context
+   to OpenAI and paying for server wakes. **Pause Free Roam** is immediate; a
+   request already sent may finish and remain billable. Server execution needs the
+   persistent storage and running Railway service described above.
+4. Inspect recent activity, decisions, source links, fixed failure descriptions,
+   and conservative costs. **Load older activity** pages backward; refresh and
+   reopening/resuming the journal fetch current state. There is no Android worker,
+   polling loop, automatic notification, or offline journal cache.
+
+Bindings are private preferences keyed by backend URL and original creation time.
+They retain only the retry UUID and verified server familiar ID, not credentials
+or journal text. A lost pairing response recovers the same identity. A missing
+previously known server identity blocks replacement and requires restoring its
+backup. Changing backend settings clears displayed content and discards old
+responses. HTTP 409 reads back current state without replaying the write; refresh
+and review before trying again. Failed reads leave controls disabled.
+
+**Forget this entry** removes its generated experience as well as visible journal
+content. **Forget all Free Roam memory** pauses execution and clears cognitive
+content. Both require confirmation; identity, local body state, and content-free
+spending receipts remain. Exports and backups may retain prior copies. Clearing
+Android app data also deletes its local creature and pairing preferences, as before;
+there is no body restore or cloud sync in this slice.
 
 After pairing, mutations require the `expectedRevision` from the latest response.
 Every effective change increments the global revision in the same SQLite

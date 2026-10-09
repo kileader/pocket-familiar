@@ -304,11 +304,14 @@ def make_server(address, api_key, access_token, thinker=request_thought, free_ro
                 url = urlsplit(self.path)
                 query = parse_qs(url.query, keep_blank_values=True)
                 if method == "GET" and url.path in ("/free-roam/memories", "/free-roam/audit", "/free-roam/journal"):
-                    if not query.keys() <= {"after", "limit"} or any(len(values) != 1 or not re.fullmatch(r"[0-9]{1,19}", values[0]) for values in query.values()):
+                    allowed = {"after", "limit", "before"} if url.path == "/free-roam/journal" else {"after", "limit"}
+                    if (not query.keys() <= allowed or {"after", "before"} <= query.keys() or
+                            any(len(values) != 1 or not re.fullmatch(r"[0-9]{1,19}", values[0]) for values in query.values())):
                         raise ValueError("Invalid page")
                     result = free_roam_store.page(url.path.rsplit("/", 1)[1],
                                                  int(query.get("after", ["0"])[0]),
-                                                 int(query.get("limit", ["20"])[0]))
+                                                 int(query.get("limit", ["20"])[0]),
+                                                 before=int(query["before"][0]) if "before" in query else None)
                 elif query:
                     raise ValueError("Unexpected query")
                 elif method == "GET" and url.path == "/free-roam":

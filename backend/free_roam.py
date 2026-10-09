@@ -475,15 +475,20 @@ class FreeRoamStore:
                 revision = self._audit(connection, "entry_forgotten", {"collection": collection, "id": entry_id})
             return {"revision": revision, "deleted": bool(deleted)}
 
-    def page(self, collection, after=0, limit=20):
+    def page(self, collection, after=0, limit=20, before=None):
         integer(after, 0, 2**63 - 1)
         integer(limit, 1, 50)
         if collection not in ("memories", "audit", "journal"):
             raise ValueError("Unknown collection")
+        if before is not None:
+            integer(before, 0, 2**63 - 1)
+            if collection != "journal" or after != 0:
+                raise ValueError("Before cursors are only supported for the journal")
         with self._transaction() as connection:
             table, condition = ("wake_runs", "visible = 1 AND ") if collection == "journal" else (collection, "")
-            rows = connection.execute(f"SELECT * FROM {table} WHERE {condition}sequence > ? ORDER BY sequence LIMIT ?",
-                                      (after, limit + 1)).fetchall()
+            comparison, order, cursor = (">", "ASC", after) if before is None else ("<", "DESC", before)
+            rows = connection.execute(f"SELECT * FROM {table} WHERE {condition}sequence {comparison} ? ORDER BY sequence {order} LIMIT ?",
+                                      (cursor, limit + 1)).fetchall()
             convert = {"memories": self._memory, "audit": self._event, "journal": self._run}[collection]
             items = [convert(row) for row in rows[:limit]]
             return {"revision": self._settings(connection)[0], "items": items,

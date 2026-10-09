@@ -46,6 +46,7 @@ fun FamiliarScreen(
     onRefresh: () -> Unit,
     onListen: () -> Unit,
     onSaveBrainSettings: (String, String) -> Unit,
+    onOpenFreeRoam: () -> Unit = {},
 ) {
     var debugExpanded by rememberSaveable { mutableStateOf(false) }
 
@@ -80,6 +81,7 @@ fun FamiliarScreen(
                 }
             }
             Spacer(Modifier.height(16.dp))
+            TextButton(onClick = onOpenFreeRoam, enabled = state.update != null) { Text("Free Roam journal") }
             TextButton(onClick = { debugExpanded = !debugExpanded }) {
                 Text(if (debugExpanded) "Hide developer details" else "Show developer details")
             }
