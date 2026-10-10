@@ -6,10 +6,12 @@ import urllib.request
 from urllib.parse import urlsplit
 
 from free_roam import StorageUnavailable, domains, fields, integer, text
+from model_config import DEFAULT_MODEL, configured_model, wake_pricing
 
-MODEL = "gpt-4.1-mini-2025-04-14"
+MODEL = DEFAULT_MODEL
 MAX_INPUT_BYTES = 24_576
-MAX_OUTPUT_TOKENS = 600
+MAX_OUTPUT_TOKENS = 2048  # Includes reasoning as well as the visible answer.
+MAX_SEARCH_INPUT_TOKENS = 131_072  # Conservative allowance for the documented 128k search context.
 MAX_RESPONSE_BYTES = 65_536
 PLAN_KEYS = ("action", "topic", "reason", "question", "reflection")
 PLAN_SCHEMA = {"type": "object", "additionalProperties": False,
@@ -66,18 +68,21 @@ def request_response(payload, api_key):
     return json.loads(body)
 
 
-def payload(instructions, context, structured=False, allowed_domains=None):
-    result = {"model": MODEL, "instructions": instructions,
+def payload(instructions, context, structured=False, allowed_domains=None, model=None):
+    model = model or configured_model()
+    wake_pricing(model)
+    result = {"model": model, "instructions": instructions,
               "input": json.dumps(context, ensure_ascii=False, allow_nan=False),
               "max_output_tokens": MAX_OUTPUT_TOKENS, "store": False,
-              "service_tier": "default", "parallel_tool_calls": False}
+              "service_tier": "default", "parallel_tool_calls": False,
+              "reasoning": {"effort": "low"}}
     if structured:
         result["text"] = {"format": {"type": "json_schema", "name": "wake_decision",
                                     "strict": True, "schema": PLAN_SCHEMA}}
     if allowed_domains:
         result.update({"tools": [{"type": "web_search", "search_context_size": "low",
                                   "filters": {"allowed_domains": allowed_domains},
-                                  "user_location": {"type": "approximate"}}],
+                                  "return_token_budget": "default"}],
                        "tool_choice": "required", "max_tool_calls": 1,
                        "include": ["web_search_call.action.sources"]})
     # A byte upper bound plus 4096 framing tokens per request underpins the reservation.
@@ -100,7 +105,7 @@ def decision_payload(claim):
     # remove the oldest recent material only when the complete payload exceeds the cap.
     while True:
         try:
-            return payload(DECISION_INSTRUCTIONS, data, structured=True)
+            return payload(DECISION_INSTRUCTIONS, data, structured=True, model=claim["model"])
         except CycleInvalid:
             if data["recentJournal"]:
                 data["recentJournal"].pop()
@@ -141,7 +146,7 @@ def validate_decision(raw, web_available):
             decision["reflection"] = text(decision["reflection"], 1000, multiline=True)
         elif decision["reflection"] != "":
             raise ValueError()
-        if any(item.get("type") != "message" for item in raw.get("output", [])):
+        if any(item.get("type") not in ("message", "reasoning") for item in raw.get("output", [])):
             raise ValueError()
         return decision
     except (ValueError, TypeError, KeyError, RecursionError):
@@ -166,7 +171,7 @@ def validate_research(raw, allowed_domains):
     calls = [item for item in raw.get("output", []) if item.get("type") == "web_search_call"]
     if (len(calls) != 1 or calls[0].get("status") != "completed" or
             calls[0].get("action", {}).get("type") != "search" or any(
-            item.get("type") not in ("message", "web_search_call") for item in raw.get("output", []))):
+            item.get("type") not in ("message", "web_search_call", "reasoning") for item in raw.get("output", []))):
         raise CycleInvalid("missing_search_evidence")
     consulted = calls[0].get("action", {}).get("sources", [])
     if not consulted:
@@ -191,15 +196,17 @@ def validate_research(raw, allowed_domains):
     return content, sources
 
 
-def usage_cost(raw, web):
-    """Conservative micro-dollar estimate; no cache discounts, plus fixed search content."""
-    if raw.get("model") != MODEL:
+def usage_cost(raw, web, model=None):
+    """Estimate reported token usage at Standard rates, ignoring cache discounts."""
+    model = model or configured_model()
+    price = wake_pricing(model)
+    if raw.get("model") != model:
         raise CycleInvalid("unexpected_model")
     usage = raw["usage"]
     input_tokens = integer(usage["input_tokens"], 0, 2**31 - 1)
     output_tokens = integer(usage["output_tokens"], 0, 2**31 - 1)
-    # $0.40 / 1M input; $1.60 / 1M output; web fee $0.01 + 8000 input tokens.
-    return (input_tokens * 2 + output_tokens * 8 + 4) // 5 + (13_200 if web else 0)
+    # Output includes reasoning. No cache discount; the hosted search fee is $0.01.
+    return (input_tokens * price["inputTenths"] + output_tokens * price["outputTenths"] + 9) // 10 + (10_000 if web else 0)
 
 
 class WakeWorker:
@@ -217,11 +224,11 @@ class WakeWorker:
 
         def call(request, web=False):
             nonlocal pending_usage
-            if not self.store.begin_wake_call(claim, web):
+            if configured_model() != claim["model"] or not self.store.begin_wake_call(claim, web):
                 raise CycleCancelled()
             pending_usage = True
             raw = self.provider(request)
-            self.store.meter_wake_call(claim, usage_cost(raw, web))
+            self.store.meter_wake_call(claim, usage_cost(raw, web, claim["model"]))
             pending_usage = False
             return raw
 
@@ -234,7 +241,7 @@ class WakeWorker:
             if decision["action"] in ("explore", "research"):
                 raw = call(payload(RESEARCH_INSTRUCTIONS,
                     {"topic": decision["topic"], "question": decision["question"]},
-                    allowed_domains=claim["controls"]["allowedDomains"]), web=True)
+                    allowed_domains=claim["controls"]["allowedDomains"], model=claim["model"]), web=True)
                 summary, sources = validate_research(raw, claim["controls"]["allowedDomains"])
             outcome = {"action": decision["action"], "topic": decision["topic"],
                        "reason": decision["reason"], "summary": summary, "sources": sources}

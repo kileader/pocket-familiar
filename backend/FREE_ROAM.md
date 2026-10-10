@@ -273,27 +273,47 @@ automatic provider retries. Missing storage leaves the existing voice path worki
 At 1,000 memories or 1,000 wake receipts, new wakes stop instead of silently losing
 history. Memory deletion frees memory slots; receipt archival is future work.
 
-## Cost accounting
+## Model selection and cost accounting
 
-Free Roam is pinned to `gpt-4.1-mini-2025-04-14`; the voice service's `OPENAI_MODEL`
-does not change it. Each request permits at most 600 output tokens. Before any
-provider call, the database reserves 50,000 micro-dollars ($0.05) for the entire
-wake. A zero budget or less than five cents of remaining budget prevents a wake.
-The byte cap, framing allowance, output caps, and single search fit that reservation
-at the checked rates. New claims cannot exceed the configured monthly allowance.
+Both Listen and Free Roam read Railway's `OPENAI_MODEL`; a blank or absent value
+defaults to `gpt-6.1-sol`. Changing this variable and deploying the Railway variable
+changes switches the model without another Android update. Free Roam accepts only
+models listed in `model_config.py`, with reviewed prices and filtered-search support:
 
-Completed responses settle using usage token counts at $0.40 per million input
-tokens and $1.60 per million output tokens, rounded up to a micro-dollar. A web
-request additionally charges a $0.01 tool fee and 8,000 input tokens. Cache discounts
-are ignored, and fixed search tokens are added even if already included in usage,
-so this intentionally overestimates spend. See the official
-[model rates](https://developers.openai.com/api/docs/models/gpt-4.1-mini),
+| Model | Input / output per million tokens (Standard) | Entire wake reservation |
+|---|---|---|
+| `gpt-6.1-sol` | $2.00 / $10.00 | $0.50 |
+| `gpt-6-luna` | $0.10 / $0.50 | $0.05 |
+
+Unknown models block autonomous calls without changing identity, memories, controls,
+or spending. `GET /free-roam` reports `runtime.model`, `modelStatus`, execution
+availability, and `wakeReservationMicrousd`; Android explains blocked execution.
+New model support requires checking Responses structured output, low reasoning,
+domain-filtered `web_search`, prices, returned model identity, and the reservation
+bound, then updating the small registry and tests. Listen retains its generic
+Responses text path for other models, whose API defaults may need adjustment.
+
+Each autonomous request caps output at 2,048 tokens, including reasoning, and uses
+low reasoning. Search uses `return_token_budget: "default"`, one tool call, and low
+search context. Before any call, SQLite reserves the model's entire wake amount.
+Admission requires that much remaining monthly budget. The reservation covers two
+24-KiB request byte bounds plus framing allowances, two output caps, a conservative
+131,072-token search-context allowance, and one $0.01 tool fee. Reservations are
+temporary admission estimates; a $0.50 reservation is not the expected wake price.
+
+Completed responses settle from reported input/output usage at the selected model's
+rates, rounded up to a micro-dollar, plus $0.01 for a search. Reasoning is included
+in output tokens; cache discounts are ignored. The old fixed 8,000-token mini-model
+search rule does not apply to these models. Rates and tool constraints were checked
+on October 10, 2026; review them when model aliases or prices change. See the official
+[Sol model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[Luna model page](https://developers.openai.com/api/docs/models/gpt-6-luna),
 [search pricing](https://developers.openai.com/api/docs/pricing), and
 [web-search controls](https://developers.openai.com/api/docs/guides/tools-web-search).
-Rates were checked on October 9, 2026 and must be reviewed if provider pricing changes.
 
 If usage is unknown, a provider timeout occurs, or the process disappears, the full
-five-cent reservation remains charged. If reported usage exceeds the reservation,
+original reservation remains charged. Existing receipts retain their original
+amounts; this update does not reprice old failures. If usage exceeds the reservation,
 the reported conservative estimate is recorded and execution is paused. Costs cannot
 be undone after a request is sent. This is an application admission limit and an
 estimate, not a provider billing guarantee; retain provider spending controls.

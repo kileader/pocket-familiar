@@ -87,8 +87,12 @@ fun FreeRoamScreen(
                         style = MaterialTheme.typography.bodyMedium)
                     Text(if (snapshot.controls.webEnabled) "Web search: " + snapshot.controls.allowedDomains.joinToString()
                         else "Web search is off · reflection and rest only", style = MaterialTheme.typography.bodySmall)
-                    if (!snapshot.executionAvailable) Text("Update the backend before starting autonomous wakes.")
-                    if (snapshot.controls.monthlyBudgetCents < 5) Text("A wake requires at least $0.05 of available API budget.")
+                    if (snapshot.modelStatus == "unsupported_model")
+                        Text("Wakes are blocked: the configured model " + snapshot.model.orEmpty() +
+                            " needs reviewed search support and pricing on the backend.")
+                    else if (!snapshot.executionAvailable) Text("Update the backend before starting autonomous wakes.")
+                    if (snapshot.controls.monthlyBudgetCents * 10_000L < snapshot.wakeReservationMicrousd)
+                        Text("A wake requires at least " + money(snapshot.wakeReservationMicrousd, 2) + " of available API budget.")
                     snapshot.monthlyCharges.firstOrNull()?.let {
                         Text("Recorded usage (" + it.month + " UTC): " + money(it.chargedMicrousd, 4) +
                             " · includes reservations", style = MaterialTheme.typography.bodySmall)
@@ -98,7 +102,7 @@ fun FreeRoamScreen(
                             if (snapshot.controls.enabled) onSaveControls(snapshot.controls.copy(enabled = false))
                             else confirm = "start"
                         }, enabled = writable && (snapshot.controls.enabled ||
-                            (snapshot.executionAvailable && snapshot.controls.monthlyBudgetCents >= 5))) {
+                            (snapshot.executionAvailable && snapshot.controls.monthlyBudgetCents * 10_000L >= snapshot.wakeReservationMicrousd))) {
                             Text(if (snapshot.controls.enabled) "Pause Free Roam" else "Start Free Roam")
                         }
                         TextButton(onClick = { controlsOpen = !controlsOpen }, enabled = !state.busy) {
@@ -107,8 +111,9 @@ fun FreeRoamScreen(
                     }
                 } }
                 if (controlsOpen) {
+                    snapshot.model?.let { model -> item { Text("Server model: " + model, style = MaterialTheme.typography.bodySmall) } }
                     item { key(snapshot.revision) {
-                        ControlEditor(snapshot.controls, snapshot.webAvailable, writable, onSaveControls)
+                        ControlEditor(snapshot.controls, snapshot.webAvailable, writable, snapshot.wakeReservationMicrousd, onSaveControls)
                     } }
                     item { JournalCard {
                         if (snapshot.interests.isNotEmpty()) Text("Interests: " + snapshot.interests.joinToString())
@@ -169,7 +174,7 @@ private fun JournalCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun ControlEditor(current: RoamControls, webAvailable: Boolean, writable: Boolean, onSave: (RoamControls) -> Unit) {
+private fun ControlEditor(current: RoamControls, webAvailable: Boolean, writable: Boolean, reservationMicrousd: Long, onSave: (RoamControls) -> Unit) {
     var web by remember { mutableStateOf(current.webEnabled) }
     var domains by remember { mutableStateOf(current.allowedDomains.joinToString(", ")) }
     var hours by remember { mutableStateOf(current.wakeIntervalHours.toString()) }
@@ -195,7 +200,8 @@ private fun ControlEditor(current: RoamControls, webAvailable: Boolean, writable
         OutlinedTextField(value = dollars, onValueChange = { dollars = it }, label = { Text("Monthly budget (USD)") },
             supportingText = { Text("API calls · $0–$100") },
             singleLine = true, enabled = writable, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
-        Text("Each wake reserves $0.05. Zero budget prevents wakes. A request already sent may finish and remain billable when you pause.")
+        Text("Each wake reserves " + money(reservationMicrousd, 2) +
+            ". Completed calls settle to their usage estimate; unknown usage keeps the reservation. Zero budget prevents wakes. A sent request remains billable when you pause.")
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         TextButton(enabled = writable, onClick = {
             try { onSave(editedControls(current, domains, hours, daily, dollars, web)); error = null }

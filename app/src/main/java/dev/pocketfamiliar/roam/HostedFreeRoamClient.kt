@@ -149,6 +149,10 @@ internal fun parseSnapshot(raw: JSONObject): RoamSnapshot {
             val status = it.string("status", 12)
             require(status in listOf("active", "paused", "completed"))
             RoamGoal(it.string("topic", 80), it.string("question", 500), status)
+        }, if (runtime.has("wakeReservationMicrousd")) runtime.strictLong("wakeReservationMicrousd").also {
+            require(it in 1..100_000_000)
+        } else 50_000, runtime.optionalString("model", 100), runtime.optionalString("modelStatus", 24).also {
+            require(it == null || it in listOf("ready", "unsupported_model"))
         })
 }
 

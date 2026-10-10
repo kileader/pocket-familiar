@@ -11,6 +11,7 @@ from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
+from model_config import configured_model, wake_pricing
 
 SCHEMA_VERSION = 2
 DATABASE_NAME = "free-roam.sqlite3"
@@ -20,7 +21,7 @@ MAX_ACTIVE_GOALS = 3
 MAX_GOALS = 100
 MAX_AUDIT_ENTRIES = 1000
 MAX_WAKE_RUNS = 1000
-WAKE_RESERVATION_MICROUSD = 50_000  # Five cents, reserved before any provider request.
+WAKE_RESERVATION_MICROUSD = 500_000  # Covers two bounded Sol requests and one 128k search context.
 WAKE_LEASE_MS = 300_000
 DEFAULT_CONTROLS = {
     "enabled": False,
@@ -31,7 +32,19 @@ DEFAULT_CONTROLS = {
     "monthlyBudgetCents": 500,
 }
 RUNTIME = {"phase": "bounded-wake-cycles", "autonomousExecutionAvailable": True,
-           "webToolsAvailable": True, "maxModelCallsPerWake": 2, "maxWebCallsPerWake": 1}
+           "webToolsAvailable": True, "maxModelCallsPerWake": 2, "maxWebCallsPerWake": 1,
+           "wakeReservationMicrousd": WAKE_RESERVATION_MICROUSD}
+
+
+def runtime():
+    model = configured_model()
+    try:
+        price = wake_pricing(model)
+        return RUNTIME | {"model": model, "modelStatus": "ready", "wakeReservationMicrousd": price["reservationMicrousd"]}
+    except ValueError:
+        return RUNTIME | {"model": model[:100], "modelStatus": "unsupported_model", "autonomousExecutionAvailable": False}
+
+
 WAKE_SCHEMA = """
 ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'owner_note';
 ALTER TABLE memories ADD COLUMN sources TEXT NOT NULL DEFAULT '[]';
@@ -345,7 +358,7 @@ class FreeRoamStore:
         revision, controls = self._settings(connection)
         last = connection.execute("SELECT * FROM wake_runs ORDER BY sequence DESC LIMIT 1").fetchone()
         return {"revision": revision, "profile": self._profile(connection), "controls": controls,
-                "runtime": dict(RUNTIME),
+                "runtime": runtime(),
                 "execution": {"lastWakeAt": None if last is None else last["started_at"],
                               "lastStatus": None if last is None else last["status"],
                               "nextWakeAt": None if last is None else last["started_at"] + controls["wakeIntervalHours"] * 3_600_000,
@@ -389,7 +402,7 @@ class FreeRoamStore:
             if controls != updated:
                 connection.execute("UPDATE settings SET controls = ? WHERE singleton = 1", (json.dumps(updated),))
                 revision = self._audit(connection, "controls_updated", {"fields": sorted(changes)})
-            return {"revision": revision, "controls": updated, "runtime": dict(RUNTIME)}
+            return {"revision": revision, "controls": updated, "runtime": runtime()}
 
     def add_memory(self, raw):
         fields(raw, ("expectedRevision", "id", "topic", "text"))
@@ -527,6 +540,11 @@ class FreeRoamStore:
 
     def claim_wake(self):
         """Atomically claim one due wake and reserve its worst-case cost. Never replay it."""
+        model = configured_model()
+        try:
+            reservation = wake_pricing(model)["reservationMicrousd"]
+        except ValueError:
+            reservation = None  # Still expire lost workers, but never start an unpriced call.
         now = self.clock()
         date = datetime.fromtimestamp(now / 1000, timezone.utc)
         day, month = date.strftime("%Y-%m-%d"), date.strftime("%Y-%m")
@@ -538,7 +556,7 @@ class FreeRoamStore:
             if expired:
                 self._audit(connection, "wake_interrupted", {"count": expired})
             revision, controls = self._settings(connection)
-            if not controls["enabled"] or self._profile(connection) is None:
+            if reservation is None or not controls["enabled"] or self._profile(connection) is None:
                 return None
             last = connection.execute("SELECT * FROM wake_runs ORDER BY sequence DESC LIMIT 1").fetchone()
             if last is not None and (last["status"] == "running" or now < last["started_at"] + controls["wakeIntervalHours"] * 3_600_000):
@@ -550,14 +568,14 @@ class FreeRoamStore:
                 return None
             row = connection.execute("SELECT charged_microusd FROM wake_budget WHERE month = ?", (month,)).fetchone()
             spent = 0 if row is None else row[0]
-            if spent + WAKE_RESERVATION_MICROUSD > controls["monthlyBudgetCents"] * 10_000:
+            if spent + reservation > controls["monthlyBudgetCents"] * 10_000:
                 return None
             run_id = str(uuid.uuid4())
             revision = self._audit(connection, "wake_started", {"id": run_id})
             connection.execute("""INSERT INTO wake_runs(id, started_at, day, month, status, revision, charged_microusd)
-                VALUES (?, ?, ?, ?, 'running', ?, ?)""", (run_id, now, day, month, revision, WAKE_RESERVATION_MICROUSD))
+                VALUES (?, ?, ?, ?, 'running', ?, ?)""", (run_id, now, day, month, revision, reservation))
             connection.execute("""INSERT INTO wake_budget VALUES (?, ?) ON CONFLICT(month)
-                DO UPDATE SET charged_microusd = charged_microusd + excluded.charged_microusd""", (month, WAKE_RESERVATION_MICROUSD))
+                DO UPDATE SET charged_microusd = charged_microusd + excluded.charged_microusd""", (month, reservation))
             context = {"curiosity": self._profile(connection)["curiosity"],
                        "interests": [self._interest(row) for row in connection.execute("SELECT * FROM interests ORDER BY priority DESC LIMIT 10")],
                        "goals": [self._goal(row) for row in connection.execute("SELECT * FROM goals WHERE status = 'active' ORDER BY priority DESC LIMIT 3")],
@@ -568,7 +586,7 @@ class FreeRoamStore:
             context["goals"] = [{key: item[key] for key in ("topic", "question", "priority")} for item in context["goals"]]
             context["memories"] = [{key: item[key] for key in ("kind", "topic", "text", "sources")} for item in context["memories"]]
             context["recentJournal"] = [{key: item[key] for key in ("status", "action", "topic", "question", "summary")} for item in context["recentJournal"]]
-            return {"id": run_id, "revision": revision, "controls": controls, "context": context}
+            return {"id": run_id, "revision": revision, "controls": controls, "context": context, "model": model}
 
     def begin_wake_call(self, claim, web=False):
         """Recheck consent at every call boundary; owner edits invalidate old context."""
@@ -577,7 +595,7 @@ class FreeRoamStore:
             revision, controls = self._settings(connection)
             if (row is None or row["status"] != "running" or revision != claim["revision"] or row["revision"] != claim["revision"] or
                     not controls["enabled"] or self.clock() >= row["started_at"] + WAKE_LEASE_MS or
-                    row["calls"] >= 2 or row["metered_microusd"] >= WAKE_RESERVATION_MICROUSD or
+                    row["calls"] >= 2 or row["metered_microusd"] >= row["charged_microusd"] or
                     (web and (not controls["webEnabled"] or not controls["allowedDomains"]))):
                 return False
             connection.execute("UPDATE wake_runs SET calls = calls + 1 WHERE id = ?", (claim["id"],))
@@ -604,14 +622,16 @@ class FreeRoamStore:
                 return
             revision, controls = self._settings(connection)
             valid = (row["status"] == "running" and row["visible"] and controls["enabled"] and
-                     revision == claim["revision"] == row["revision"] and self.clock() < row["started_at"] + WAKE_LEASE_MS)
-            cost = row["metered_microusd"] if usage_known else max(row["metered_microusd"], WAKE_RESERVATION_MICROUSD)
+                     revision == claim["revision"] == row["revision"] and self.clock() < row["started_at"] + WAKE_LEASE_MS and
+                     claim["model"] == configured_model())
+            # Use the receipt's original reservation, including claims from an older release.
+            cost = row["metered_microusd"] if usage_known else max(row["metered_microusd"], row["charged_microusd"])
             connection.execute("UPDATE wake_budget SET charged_microusd = charged_microusd + ? WHERE month = ?",
                                (cost - row["charged_microusd"], row["month"]))
             status = "cancelled" if not valid else "failed" if error_code else "completed"
             connection.execute("UPDATE wake_runs SET status = ?, finished_at = ?, charged_microusd = ?, error_code = ? WHERE id = ?",
                                (status, self.clock(), cost, error_code if valid else None, claim["id"]))
-            if cost > WAKE_RESERVATION_MICROUSD:
+            if cost > row["charged_microusd"]:
                 connection.execute("UPDATE settings SET controls = ? WHERE singleton = 1", (json.dumps(controls | {"enabled": False}),))
                 self._audit(connection, "wake_budget_overrun", {"id": claim["id"]})
             if valid and outcome is not None and not error_code:

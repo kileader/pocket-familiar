@@ -21,8 +21,10 @@ Durable wake claims, cost reservations, and a journal make its activity inspecta
    - `FAMILIAR_ACCESS_TOKEN`: a separate random token shared only with your phone.
      Generate one locally: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
    - `OPENAI_MODEL`: optional model name, for example `gpt-6-luna` or `gpt-6.1-sol`. If omitted or
-     blank, the service uses `gpt-4.1-mini-2025-04-14`. Change this variable and
+     blank, the service uses `gpt-6.1-sol`. Both Listen and Free Roam read it. Change this variable and
      deploy the Railway changes to switch models; no Android update is needed.
+     Autonomous wakes require a reviewed entry in `model_config.py`; currently
+     Sol and Luna are supported. Other names block wakes with a journal status.
 5. Deploy. The Dockerfile starts the server on Railway's `PORT`; no start override,
    volume, database, or other service is needed for Listen. Keep one replica.
    Free Roam additionally requires the explicit volume setup described in

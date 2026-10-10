@@ -63,12 +63,12 @@ class ContextTests(unittest.TestCase):
             self.assertEqual(request_thought(CONTEXT, "fake-provider-key"), {"text": "Dozing."})
         payload = json.loads(send.call_args.args[0].data)
         self.assertFalse(payload["store"])
-        self.assertEqual(payload["max_output_tokens"], 160)
+        self.assertEqual(payload["max_output_tokens"], 2048)
         self.assertNotIn("tools", payload)
         self.assertNotIn("fake-provider-key", payload["input"])
         self.assertEqual(json.loads(payload["input"]), CONTEXT)
-        self.assertEqual(payload["model"], "gpt-4.1-mini-2025-04-14")
-        self.assertNotIn("reasoning", payload)
+        self.assertEqual(payload["model"], "gpt-6.1-sol")
+        self.assertEqual(payload["reasoning"], {"effort": "low"})
 
     def test_railway_model_override_disables_reasoning_for_luna(self):
         response = MagicMock()

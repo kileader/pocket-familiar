@@ -134,6 +134,21 @@ class FreeRoamPresentationTest {
         }
     }
 
+    @Test fun currentModelBudgetAndUnsupportedModelBlockStartingWithAnExplanation() {
+        ActivityScenario.launch(MainActivity::class.java).use {
+            val snapshot = fixture.snapshot!!
+            render(fixture.copy(snapshot = snapshot.copy(controls = snapshot.controls.copy(monthlyBudgetCents = 49))))
+            find("A wake requires at least $0.50")
+            assertFalse(generateSequence(find("Start Free Roam")) { it.parent }.first { it.isClickable }.isEnabled)
+            capture("journal-model-budget")
+            render(fixture.copy(snapshot = snapshot.copy(executionAvailable = false, model = "future-model", modelStatus = "unsupported_model")))
+            find("Wakes are blocked: the configured model future-model")
+            assertFalse(generateSequence(find("Start Free Roam")) { it.parent }.first { it.isClickable }.isEnabled)
+            capture("journal-unsupported-model")
+            assertEquals(0, starts.get())
+        }
+    }
+
     private fun render(state: FreeRoamUiState, narrow: Boolean = false) {
         // Equal fixtures still need a new composition: setContent can retain scroll state.
         val renderKey = ++renderCount

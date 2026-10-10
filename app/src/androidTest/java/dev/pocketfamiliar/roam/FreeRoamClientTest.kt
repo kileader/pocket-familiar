@@ -22,7 +22,8 @@ internal object RoamFixtures {
         .put("profile", if (profile) JSONObject().put("familiarId", FAMILIAR).put("pairingId", PAIR)
             .put("createdAt", identity.createdAt).put("curiosity", 0.65) else JSONObject.NULL)
         .put("controls", controlsPayload(7, RoamControls()).apply { remove("expectedRevision") })
-        .put("runtime", JSONObject().put("autonomousExecutionAvailable", true).put("webToolsAvailable", true))
+        .put("runtime", JSONObject().put("autonomousExecutionAvailable", true).put("webToolsAvailable", true)
+            .put("model", "gpt-6.1-sol").put("modelStatus", "ready").put("wakeReservationMicrousd", 500_000))
         .put("execution", JSONObject().put("lastWakeAt", JSONObject.NULL).put("nextWakeAt", JSONObject.NULL).put("monthlyCharges", JSONArray()))
         .put("interests", JSONArray()).put("goals", JSONArray())
     fun entry(sequence: Long = 100): JSONObject = JSONObject().put("sequence", sequence).put("id", ENTRY)
@@ -105,6 +106,19 @@ class FreeRoamClientTest {
         assertThrows(Exception::class.java) { parseSnapshot(RoamFixtures.snapshot().put("revision", 7.5)) }
         val wrongCursor = RoamFixtures.page().put("nextCursor", 101)
         assertThrows(Exception::class.java) { parseJournal(wrongCursor, Long.MAX_VALUE) }
+    }
+
+    @Test fun runtimeUsesServerModelAndReservationWithLegacyCompatibility() {
+        val state = RoamFixtures.state()
+        assertEquals("gpt-6.1-sol", state.model)
+        assertEquals(500_000L, state.wakeReservationMicrousd)
+        val legacy = RoamFixtures.snapshot()
+        legacy.getJSONObject("runtime").apply { remove("model"); remove("modelStatus"); remove("wakeReservationMicrousd") }
+        assertEquals(50_000L, parseSnapshot(legacy).wakeReservationMicrousd)
+        val unknown = RoamFixtures.snapshot()
+        unknown.getJSONObject("runtime").put("model", "future-model").put("modelStatus", "unsupported_model")
+            .put("autonomousExecutionAvailable", false)
+        assertFalse(parseSnapshot(unknown).executionAvailable)
     }
 
     @Test fun httpFailuresAreSanitizedAndNeverRetried() = runBlocking {

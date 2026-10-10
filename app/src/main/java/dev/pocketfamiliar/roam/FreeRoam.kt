@@ -60,6 +60,9 @@ data class RoamSnapshot(
     val monthlyCharges: List<RoamCharge>,
     val interests: List<String>,
     val goals: List<RoamGoal>,
+    val wakeReservationMicrousd: Long = 50_000, // Legacy backend compatibility.
+    val model: String? = null,
+    val modelStatus: String? = null,
 )
 data class RoamJournalPage(val revision: Long, val items: List<RoamJournalEntry>, val nextCursor: Long?)
 

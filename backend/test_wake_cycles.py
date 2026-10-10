@@ -11,13 +11,14 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
+from model_config import WAKE_MODELS
 
 from free_roam import (DATABASE_NAME, DEFAULT_CONTROLS, SCHEMA, WAKE_SCHEMA, FreeRoamStore,
                        StorageUnavailable, WAKE_LEASE_MS, WAKE_RESERVATION_MICROUSD,
                        initialize, migrate)
 import test_free_roam
 from test_free_roam import new_id
-from wake_cycles import (CycleInvalid, MAX_INPUT_BYTES, MAX_OUTPUT_TOKENS, MODEL, WakeWorker,
+from wake_cycles import (CycleInvalid, MAX_INPUT_BYTES, MAX_OUTPUT_TOKENS, MAX_SEARCH_INPUT_TOKENS, MODEL, WakeWorker,
                          decision_payload, payload, permitted_source, request_response,
                          usage_cost, validate_decision, validate_research)
 
@@ -48,6 +49,9 @@ def research(url="https://www.nasa.gov/science", **changes):
 
 class WakeTests(unittest.TestCase):
     def setUp(self):
+        self.model_env = patch.dict("os.environ", {"OPENAI_MODEL": MODEL})
+        self.model_env.start()
+        self.addCleanup(self.model_env.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         initialize(self.directory.name)
@@ -101,12 +105,60 @@ class WakeTests(unittest.TestCase):
         self.assertNotIn("tools", self.calls[0])
         self.assertFalse(self.calls[0]["store"])
         self.assertEqual(self.calls[0]["model"], MODEL)
+        self.assertEqual(MODEL, "gpt-6.1-sol")
+        self.assertEqual(self.calls[0]["reasoning"], {"effort": "low"})
+        self.assertEqual(self.calls[0]["max_output_tokens"], 2048)
 
     def test_rest_is_a_real_model_decision_and_creates_no_fake_experience(self):
         self.enable()
         self.assertEqual(self.worker(plan("rest")).run_once(), "completed")
         self.assertEqual(self.store.page("journal")["items"][0]["action"], "rest")
         self.assertEqual(self.store.export()["memories"], [])
+
+    def test_configured_luna_uses_its_own_reservation_payload_and_prices(self):
+        self.enable(monthlyBudgetCents=5)
+        with patch.dict("os.environ", {"OPENAI_MODEL": "gpt-6-luna"}):
+            state = self.store.snapshot()
+            self.assertEqual(state["runtime"]["model"], "gpt-6-luna")
+            self.assertEqual(state["runtime"]["wakeReservationMicrousd"], 50_000)
+            raw = plan("rest") | {"model": "gpt-6-luna"}
+            self.assertEqual(self.worker(raw).run_once(), "completed")
+            self.assertEqual(self.calls[0]["model"], "gpt-6-luna")
+            self.assertEqual(self.calls[0]["reasoning"], {"effort": "low"})
+            self.assertEqual(self.store.page("journal")["items"][0]["chargedMicrousd"], 275)
+
+    def test_unknown_model_blocks_autonomy_without_changing_state_or_spending(self):
+        self.enable()
+        before = self.store.export()
+        with patch.dict("os.environ", {"OPENAI_MODEL": "future-model"}):
+            runtime = self.store.snapshot()["runtime"]
+            self.assertFalse(runtime["autonomousExecutionAvailable"])
+            self.assertEqual(runtime["modelStatus"], "unsupported_model")
+            self.assertEqual(self.worker().run_once(), "idle")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.store.export(), before)
+
+    def test_model_change_between_calls_cancels_the_search(self):
+        self.enable(webEnabled=True, allowedDomains=["nasa.gov"])
+        with patch.dict("os.environ", {"OPENAI_MODEL": MODEL}) as environment:
+            def provider(request):
+                self.calls.append(request)
+                environment["OPENAI_MODEL"] = "gpt-6-luna"
+                return plan("research")
+            self.assertEqual(WakeWorker(self.store, "fake-key", provider).run_once(), "cancelled")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.store.export()["memories"], [])
+
+    def test_unsupported_model_still_records_a_lost_worker_without_replaying_it(self):
+        self.enable()
+        self.store.claim_wake()
+        self.now += WAKE_LEASE_MS
+        with patch.dict("os.environ", {"OPENAI_MODEL": "future-model"}):
+            self.assertIsNone(self.store.claim_wake())
+        receipt = self.store.page("journal")["items"][0]
+        self.assertEqual(receipt["status"], "interrupted")
+        self.assertEqual(receipt["chargedMicrousd"], WAKE_RESERVATION_MICROUSD)
+        self.assertEqual(receipt["modelCalls"], 0)
 
     def test_newest_journal_cursor_preserves_ascending_clients_and_skips_redacted_receipts(self):
         self.enable()
@@ -144,6 +196,9 @@ class WakeTests(unittest.TestCase):
             self.assertFalse(request["parallel_tool_calls"])
             self.assertEqual(request["tools"][0]["type"], "web_search")
             self.assertEqual(request["tools"][0]["filters"], {"allowed_domains": ["nasa.gov"]})
+            self.assertEqual(request["tools"][0]["return_token_budget"], "default")
+            self.assertEqual(request["model"], "gpt-6.1-sol")
+            self.assertEqual(request["reasoning"], {"effort": "low"})
             self.assertEqual(request["include"], ["web_search_call.action.sources"])
         self.assertEqual([item["modelCalls"] for item in state["journal"]], [2, 2])
         self.assertEqual(state["journal"][0]["question"], decision("explore")["question"])
@@ -234,12 +289,23 @@ class WakeTests(unittest.TestCase):
     def test_zero_or_insufficient_monthly_budget_never_calls_provider(self):
         self.enable(monthlyBudgetCents=0)
         self.assertEqual(self.worker().run_once(), "idle")
-        self.controls(monthlyBudgetCents=4)
+        self.controls(monthlyBudgetCents=WAKE_RESERVATION_MICROUSD // 10_000 - 1)
         self.assertEqual(self.worker().run_once(), "idle")
         self.assertEqual(self.calls, [])
 
+    def test_legacy_claim_keeps_its_original_reservation_after_pricing_update(self):
+        self.enable()
+        claim = self.store.claim_wake()
+        with closing(sqlite3.connect(Path(self.directory.name) / DATABASE_NAME)) as connection:
+            connection.execute("UPDATE wake_runs SET charged_microusd = 50000 WHERE id = ?", (claim["id"],))
+            connection.execute("UPDATE wake_budget SET charged_microusd = 50000")
+            connection.commit()
+        self.assertEqual(self.store.finish_wake(claim, error_code="provider_timeout", usage_known=False), "failed")
+        self.assertEqual(self.store.page("journal")["items"][0]["chargedMicrousd"], 50_000)
+        self.assertEqual(self.store.snapshot()["execution"]["monthlyCharges"][0]["chargedMicrousd"], 50_000)
+
     def test_unknown_usage_consumes_reservation_without_automatic_retry(self):
-        self.enable(monthlyBudgetCents=5)
+        self.enable(monthlyBudgetCents=WAKE_RESERVATION_MICROUSD // 10_000)
         self.assertEqual(self.worker(TimeoutError("secret provider body")).run_once(), "failed")
         item = self.store.page("journal")["items"][0]
         self.assertEqual(item["chargedMicrousd"], WAKE_RESERVATION_MICROUSD)
@@ -402,6 +468,11 @@ class WakeTests(unittest.TestCase):
 
 
 class ProviderBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        model_env = patch.dict("os.environ", {"OPENAI_MODEL": MODEL})
+        model_env.start()
+        self.addCleanup(model_env.stop)
+
     def test_strict_decision_contract_rejects_injected_actions_or_privileges(self):
         for changes in ({"action": "set_controls"}, {"reflection": "x" * 1001}, {"question": "unexpected"},
                         {"enabled": True}, {"topic": ""}, {"action": "research"}):
@@ -429,10 +500,23 @@ class ProviderBoundaryTests(unittest.TestCase):
         with self.assertRaises(CycleInvalid):
             usage_cost(response("x", model="unpriced-model"), False)
 
-    def test_largest_payload_and_fixed_search_cost_fit_the_reservation(self):
-        bound = ((MAX_INPUT_BYTES + 4096) * 2 + 8000) * 0.4 + MAX_OUTPUT_TOKENS * 2 * 1.6 + 13_200
-        self.assertLess(bound, WAKE_RESERVATION_MICROUSD)
-        self.assertEqual(usage_cost(response("x"), True) - usage_cost(response("x"), False), 13_200)
+    def test_largest_payload_reasoning_and_search_context_fit_the_reservation(self):
+        for model, price in WAKE_MODELS.items():
+            bound = (((MAX_INPUT_BYTES + 4096) * 2 + MAX_SEARCH_INPUT_TOKENS) * price["inputTenths"] +
+                     MAX_OUTPUT_TOKENS * 2 * price["outputTenths"] + 9) // 10 + 10_000
+            self.assertLess(bound, price["reservationMicrousd"], model)
+        self.assertEqual(usage_cost(response("x"), True) - usage_cost(response("x"), False), 10_000)
+        self.assertEqual(usage_cost(response("x", usage={"input_tokens": 2000, "output_tokens": 150,
+            "output_tokens_details": {"reasoning_tokens": 100}}), True), 15_500)
+
+    def test_reasoning_items_are_accepted_without_permitting_other_tools(self):
+        for raw, validate, args in ((plan(), validate_decision, (False,)),
+                                    (research(), validate_research, (["nasa.gov"],))):
+            raw["output"].insert(0, {"type": "reasoning", "summary": [], "encrypted_content": "opaque"})
+            validate(raw, *args)
+            raw["output"].append({"type": "function_call", "name": "change_permissions"})
+            with self.assertRaises(CycleInvalid):
+                validate(raw, *args)
         with self.assertRaises(CycleInvalid):
             payload("x", {"data": "x" * MAX_INPUT_BYTES})
 

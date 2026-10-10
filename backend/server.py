@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 from discoveries import DISCOVERIES
 from free_roam import Conflict, StorageUnavailable, store_from_environment
 
-DEFAULT_MODEL = "gpt-4.1-mini-2025-04-14"
+from model_config import configured_model
 DAILY_REQUEST_LIMIT = 100  # Per process; resets on restart. Deploy one instance.
 COOLDOWN_SECONDS = 5
 INSTRUCTIONS = """You are Pocket Familiar, a tiny curious creature living on a phone.
@@ -126,7 +126,7 @@ def choose_discovery(recent_ids):
 
 
 def request_thought(context, api_key):
-    model = os.environ.get("OPENAI_MODEL", "").strip() or DEFAULT_MODEL
+    model = configured_model()
     discovery = choose_discovery(context.get("recentDiscoveryIds", [])) if context.get("discoveryVersion") == 1 else None
     instructions = INSTRUCTIONS
     observations = context
