@@ -102,6 +102,7 @@ private fun VoiceSettings(configured: Boolean, onSave: (String, String) -> Unit)
     Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(if (configured) "Voice service configured" else "Voice service setup", style = MaterialTheme.typography.titleSmall)
         Text("Listen sends creature state and enabled phone observations to your backend and OpenAI. " +
+            "When paired with Free Roam, it can also discuss saved experiences. " +
             "Only the last eight discovery IDs are saved locally and sent to your backend to reduce repeats; conversations are not saved.",
             style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(value = endpoint, onValueChange = { endpoint = it },

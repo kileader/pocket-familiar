@@ -33,4 +33,12 @@ class CreatureBrainTest {
         assertThrows(IllegalArgumentException::class.java) { BrainResponse("A thought", "bad id") }
         assertThrows(IllegalArgumentException::class.java) { DiscoverySource("Source", "http://example.com") }
     }
+
+    @Test fun `remembered sources accept journal bounds and reject misleading URLs`() {
+        val url = "https://science.nasa.gov/" + "a".repeat(1800)
+        assertEquals(url, DiscoverySource("界".repeat(200), url).url)
+        for (unsafe in listOf("https://user@nasa.gov/a", "https://nasa.gov:8080/a", "https://nasa.gov/a\\b")) {
+            assertThrows(Exception::class.java) { DiscoverySource("Source", unsafe) }
+        }
+    }
 }

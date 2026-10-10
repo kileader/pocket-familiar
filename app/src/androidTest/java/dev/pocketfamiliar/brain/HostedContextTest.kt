@@ -6,6 +6,8 @@ import dev.pocketfamiliar.perception.EnvironmentSnapshot
 import dev.pocketfamiliar.perception.ObservedAppUsage
 import dev.pocketfamiliar.perception.TimeOfDay
 import dev.pocketfamiliar.simulation.CreatureState
+import dev.pocketfamiliar.roam.RoamBinding
+import dev.pocketfamiliar.roam.RoamFixtures
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,6 +19,7 @@ import java.time.LocalTime
 /** Exercises the actual outbound serializer without networking or an API key. */
 @RunWith(AndroidJUnit4::class)
 class HostedContextTest {
+    private val binding = RoamBinding(RoamFixtures.PAIR, RoamFixtures.FAMILIAR)
     private val creature = CreatureState.initial(1_800_000_111_000L).copy(
         lastUpdatedAt = 1_800_000_222_000L,
         lastInteractionAt = 1_800_000_211_000L,
@@ -85,6 +88,16 @@ class HostedContextTest {
         assertEquals(history, (0 until outgoing.length()).map(outgoing::getString))
     }
 
+    @Test fun pairedListenSendsOnlyOpaqueReferencesAndIncompletePairingIsOmitted() {
+        val context = CreatureContext(creature, environment())
+        val payload = contextPayload(context, binding)
+        assertEquals(setOf("pairingId", "familiarId"), payload.getJSONObject("freeRoam").fieldNames())
+        assertEquals(RoamFixtures.PAIR, payload.getJSONObject("freeRoam").getString("pairingId"))
+        assertFalse(payload.toString().contains(creature.createdAt.toString()))
+        assertFalse(payload.has("rememberedExperiences"))
+        assertFalse(contextPayload(context, RoamBinding(RoamFixtures.PAIR)).has("freeRoam"))
+    }
+
     @Test fun emptyObservedHourDoesNotInventAnyAppEntries() {
         val payload = contextPayload(CreatureContext(creature, environment(AppUsageObservation(60, emptyList()))))
         val usage = payload.getJSONObject("environment").getJSONObject("appUsage")
@@ -109,7 +122,7 @@ class HostedContextTest {
             ObservedAppUsage(name, 60)
         }
         val history = (1..8).map { "a".repeat(62) + "-$it" }
-        val payload = contextPayload(CreatureContext(creature, environment(AppUsageObservation(60, apps)), history))
+        val payload = contextPayload(CreatureContext(creature, environment(AppUsageObservation(60, apps)), history), binding)
         val bytes = payload.toString().toByteArray(Charsets.UTF_8)
         assertTrue("Outbound payload exceeds the backend's 4096-byte request limit: ${bytes.size}", bytes.size <= 4096)
         assertEquals(5, payload.getJSONObject("environment").getJSONObject("appUsage").getJSONArray("apps").length())

@@ -43,7 +43,10 @@ Railway documentation: [monorepo setup](https://docs.railway.com/guides/deployin
 
 ## Behavior and limits
 
-- Model selected with `OPENAI_MODEL`, no tools. v0.2b Listen requests select from
+- Model selected with `OPENAI_MODEL`, no tools. Paired v0.3.1 Listen can discuss a
+  completed Free Roam finding or reflection with its saved research source.
+  This is one read-only model call; it does not save conversations or phone activity.
+  When no recent unheard experience exists, Listen selects from
   [17 reviewed materials](discoveries.py): 6 facts, 6 original gentle jokes, and
   5 playful observation seeds. Facts and jokes are inserted verbatim; the model
   supplies a brief personality reaction rather than rewriting their core. Facts
@@ -107,10 +110,12 @@ legacy compatibility, output filtering, and error isolation.
 Free Roam tests also cover immutable pairing, persistence across store recreation,
 concurrent and stale writes, authenticated reads and controls, limits, owner-note
 provenance, pagination, forgetting, missing/incompatible storage, backup recovery,
-and isolation from the existing Listen provider context.
+and isolation of cognitive storage from phone observations.
 Wake-cycle tests exercise independent model decisions, filtered source evidence,
 cross-worker claims, restart/clock boundaries, durable daily/monthly accounting,
 pause/forget during execution, interruption recovery, migration, and journal APIs.
+Memory-bridge tests cover completed experiences, source attribution, pairing
+isolation, bounded recency, history, and forgetting during Listen.
 All provider responses in these tests are fake; no paid Free Roam smoke test has
 been performed and this change does not deploy or activate a Railway worker.
 Android instrumented voice tests cover state preservation, concurrent pokes,

@@ -117,6 +117,21 @@ class VoiceIntegrationTest {
         assertFalse(reopened.contains("material-0"))
     }
 
+    @Test fun rememberedResearchPreservesItsSourceAndBodyAndEntersListenHistory() = runBlocking {
+        val before = repository.refresh().state
+        val id = "roam-a5e01d5c-62c8-470c-bfd1-634391817f33"
+        val source = DiscoverySource("Navigation research", "https://science.nasa.gov/")
+        val vm = model(object : CreatureBrain {
+            override suspend fun think(context: CreatureContext) =
+                BrainResponse("I remember exploring how animals navigate. There is still much to learn.", id, source)
+        })
+        vm.listen()
+        val result = withTimeout(5000) { vm.uiState.first { !it.isThinking && it.thought != null } }
+        assertEquals(source, result.thoughtSource)
+        assertEquals(before, repository.refresh().state)
+        assertEquals(listOf(id), DiscoveryHistoryStore(context, "test-discovery-history").read())
+    }
+
     @Test fun nextListenReceivesHistoryAndPokeClearsAttribution() = runBlocking {
         history.remember("old-material")
         val source = DiscoverySource("NASA", "https://science.nasa.gov/")

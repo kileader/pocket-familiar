@@ -27,9 +27,10 @@ data class BrainResponse(val text: String, val discoveryId: String? = null, val 
 
 data class DiscoverySource(val title: String, val url: String) {
     init {
-        require(title.isNotBlank() && title.length <= 120 && url.length <= 512)
+        require(title.isNotBlank() && title.codePointCount(0, title.length) <= 200 && url.length <= 2048)
+        require(url.all { it.code in 33..126 } && '\\' !in url)
         val uri = java.net.URI(url)
-        require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null)
+        require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null && uri.port in listOf(-1, 443))
     }
 }
 

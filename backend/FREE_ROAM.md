@@ -9,11 +9,13 @@ owner notes, interest/goal editing, and export remain available through the API.
 The Android Room row remains canonical for the body. Pairing stores only its
 original creation timestamp and fixed curiosity trait as identity metadata.
 Energy, stimulation, mode, interaction history, and phone observations are rejected
-by these APIs. Nothing from this store is added to the existing `/think` payload.
+by the cognitive APIs. Paired Android v0.3.1 Listen requests can read completed
+experiences from this store; they cannot write memories or change body state.
 An authenticated pairing request is consent to persist those two identity fields.
 Creation timestamps and identity IDs are not sent to the provider. Explicitly enabling
 Free Roam additionally permits sending curiosity, interests, active goals, recent
-notes, and recent experiences to OpenAI. Phone observations remain excluded.
+notes, and recent experiences to OpenAI. Autonomous wakes exclude phone observations.
+Listen's optional phone context remains transient and is never saved in this store.
 
 ## Storage and deployment
 
@@ -119,7 +121,9 @@ change.
 
 ## Android inspection and control
 
-Update the backend to this version before using the Android v0.3 journal. Open
+Update the backend to this version before using Android v0.3.1. No database
+migration is needed for an existing schema-2 store; preserve its volume and pairing.
+Open
 **Free Roam journal** beneath the familiar snapshot; it reuses the saved voice
 HTTPS URL and owner access token. No OpenAI key belongs on the phone.
 
@@ -269,7 +273,8 @@ influence subsequent choices. Retrieval is bounded recency, not semantic search.
 
 Claims expire after five minutes. An interrupted worker is recorded as interrupted
 and is never replayed. Failures also count toward the daily limit; there are no
-automatic provider retries. Missing storage leaves the existing voice path working.
+automatic provider retries. Missing storage leaves unpaired Listen working;
+paired Listen fails visibly rather than pretending its memories are available.
 At 1,000 memories or 1,000 wake receipts, new wakes stop instead of silently losing
 history. Memory deletion frees memory slots; receipt archival is future work.
 
@@ -318,6 +323,33 @@ the reported conservative estimate is recorded and execution is paused. Costs ca
 be undone after a request is sent. This is an application admission limit and an
 estimate, not a provider billing guarantee; retain provider spending controls.
 Railway hosting and the existing Listen requests are separate from this allowance.
+
+## Listen and remembered experiences
+
+After pairing, Android sends only its opaque `pairingId` and `familiarId` in an
+optional `/think` field named `freeRoam`. The server checks both against the stored
+profile. These references and the local creature's creation time are not forwarded
+to OpenAI. Client-supplied memories are rejected.
+
+The server reads at most the three newest completed `finding` or `reflection`
+memories, excludes IDs in the phone's eight-item discovery history, and selects the
+newest remaining experience. It sends at most 600 characters of that experience,
+its kind/topic and source titles in the existing single Listen call. Owner notes,
+failed wakes, and rest receipts are not presented as lived experiences. With no
+eligible experience, Listen uses the existing curated discovery selection.
+
+Findings are remembered interpretations with uncertainty; reflections remain
+subjective. Attribution comes from a saved research source, never a model-generated
+URL. `roam-<memory UUID>` uses the existing discovery-history format. No additional
+search or provider request occurs, although the extra prompt context affects Listen
+cost. Generated Listen text and phone observations are not persisted as memories.
+This first bridge is read-only: Listen does not yet learn from conversations.
+
+Pausing wakes preserves access to saved experiences. Forgetting removes content
+from future Listen requests. If it is forgotten during a paid Listen call, the
+response is discarded with HTTP 409; the already-sent request remains billable.
+A mismatched pairing returns 409 before contacting the provider; unavailable
+cognitive storage returns 503. Room state and simulation rules remain unchanged.
 
 ## Export, forgetting, and recovery
 
@@ -368,5 +400,7 @@ stale/concurrent transactions, permission validation, provenance, pagination,
 forgetting, backup recovery, storage failure, and unchanged legacy Listen behavior.
 They also exercise autonomous decisions, real-source provenance requirements,
 durable claims and costs, expiry without replay, in-flight consent changes, and
-the schema-1 migration. Live provider compatibility and production activation
+the schema-1 migration, configurable model prices/reservations, and the read-only
+Listen bridge (pairing isolation, source attribution, history, and forgetting).
+Live provider compatibility and production activation
 remain an operator check; no deployment or paid API test is part of this commit.

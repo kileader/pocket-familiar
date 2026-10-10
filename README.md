@@ -1,7 +1,8 @@
 # Pocket Familiar
 
 An Android familiar with persistent body state and optional autonomous server activity.
-v0.3 adds a **Free Roam journal**, explicit pairing, permissions, and spending limits
+v0.3.1 connects Listen to completed Free Roam experiences and makes the server model
+configurable for both paths. v0.3 added a **Free Roam journal**, explicit pairing, permissions, and spending limits
 to the existing creature snapshot, poke, and on-demand **Listen** action.
 The **Familiar Snapshot** brings its pose, phone context, current thought, and a
 little shared history into one view. When enabled, Free Roam chooses activities
@@ -236,6 +237,12 @@ access or observations leave the ordinary creature and Listen feature working.
 
 ## Verification
 
+Listen/Free Roam v0.3.1: 117 offline backend tests, 59 JVM tests, and all 49
+instrumented tests pass on Android 15 / API 35. APK assembly and lint pass.
+Emulator captures of model blocking, budget admission, and narrow controls were
+visually inspected. This update has not been deployed or tested with a live paid
+search; its provider compatibility still needs an owner check after deployment.
+
 Free Roam Android v0.3: APK assembly, lint, 58 JVM tests, 102 mocked backend
 tests, and all 45 instrumented tests pass on the Android 15 / API 35 emulator.
 After the full instrumented suite, the 16 Free Roam tests were rerun at a true
@@ -355,7 +362,11 @@ starting requires confirmation of paid server wakes. Pause and confirmed memory
 deletion are also available. Configure the existing voice connection first and
 update/provision the backend using the instructions above. Server wakes require
 Railway to remain running. Android keeps journal text in memory only and adds no
-background job. The Room creature and existing Listen context remain unchanged.
+background job. The Room creature and simulation remain unchanged. Paired Listen
+can discuss a recent completed finding or reflection, with saved attribution and
+existing discovery history. It does not store conversations or phone observations.
+`OPENAI_MODEL` selects both server paths; reviewed Sol/Luna entries keep autonomous
+pricing and reservations explicit. See the backend guide for model support and costs.
 Enabling Free Roam permits additional paid model calls.
 
 This prototype intentionally excludes chat, feeding, health, currencies, quests,

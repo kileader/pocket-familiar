@@ -372,6 +372,22 @@ class FreeRoamStore:
         with self._transaction() as connection:
             return self._snapshot(connection)
 
+    def listen_memories(self, binding, recent_ids=()):
+        """Read recent, completed experiences for this pairing, without storing phone context."""
+        fields(binding, ("pairingId", "familiarId"))
+        identifier(binding["pairingId"])
+        identifier(binding["familiarId"])
+        with self._transaction() as connection:
+            profile = self._profile(connection)
+            if profile is None or any(profile[key] != binding[key] for key in binding):
+                raise Conflict("Listen pairing does not match this familiar")
+            rows = connection.execute("""SELECT m.* FROM memories m JOIN wake_runs w ON w.id = m.id
+                WHERE m.kind IN ('finding', 'reflection') AND w.status = 'completed' AND w.visible = 1
+                ORDER BY m.sequence DESC LIMIT 3""").fetchall()
+            return [{"id": row["id"], "kind": row["kind"], "topic": row["topic"],
+                     "text": row["text"][:600], "sources": json.loads(row["sources"])}
+                    for row in rows if "roam-" + row["id"] not in recent_ids]
+
     def pair(self, raw):
         fields(raw, ("pairingId", "createdAt", "curiosity"))
         pairing_id = identifier(raw["pairingId"])

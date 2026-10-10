@@ -23,7 +23,7 @@ class FamiliarApplication : Application() {
     val repository by lazy { CreatureRepository(database) }
     val perception by lazy { PhonePerception(applicationContext) }
     val brainSettings by lazy { BrainSettingsStore(applicationContext) }
-    val brain by lazy { HostedCreatureBrain(brainSettings::read) }
+    val brain by lazy { HostedCreatureBrain(brainSettings::read, freeRoamBindings::read) }
     val discoveryHistory by lazy { DiscoveryHistoryStore(applicationContext) }
     val freeRoamClient by lazy { HostedFreeRoamClient() }
     val freeRoamBindings by lazy { SharedRoamBindingStore(applicationContext) }

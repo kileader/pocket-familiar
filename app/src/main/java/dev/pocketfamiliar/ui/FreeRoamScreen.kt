@@ -145,7 +145,7 @@ fun FreeRoamScreen(
         val title = when (action) { "pair" -> "Connect this familiar?"; "start" -> "Start paid server wakes?"
             "forget" -> "Forget all Free Roam memory?"; else -> "Forget this journal entry?" }
         val description = when (action) {
-            "pair" -> "Only the creation time and curiosity are uploaded. The existing familiar and its saved state are preserved."
+            "pair" -> "Only the creation time and curiosity are uploaded. Listen can then discuss saved Free Roam experiences. The existing familiar and its saved state are preserved."
             "start" -> "This permits sending curiosity, interests, goals, and recent memories to OpenAI. Wakes can incur API charges and continue when the app is closed, within your saved limits. Web search follows its separate permission. You can pause here."
             "forget" -> "This clears all cognitive content and pauses Free Roam. It preserves the familiar’s identity, phone state, and spending receipts. Previously exported copies and backups may retain old content."
             else -> "This removes the journal text and its associated generated memory. Its content-free spending receipt remains."
